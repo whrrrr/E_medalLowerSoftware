@@ -43,6 +43,8 @@
 #include "lpm.h"
 #include "w25q32.h"
 #include "flash_manager.h"
+#include "image_receiver.h"
+#include "image_display.h"
 // #include "flash_test.h"
 
 /******************************************************************************
@@ -73,8 +75,11 @@ static volatile boolean_t tg8s = FALSE;
 static float temperature = 0.0, humidity = 0.0;
 static boolean_t linkFlag = FALSE;
 static flash_manager_t g_flash_manager;
+static image_receiver_t g_image_receiver;
+static image_display_t g_image_display;
 static uint8_t read_buffer[64];
 static uint8_t test_data[] = "Hello Flash Manager!";
+static uint16_t last_received_image_id = 0;
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                             
  ******************************************************************************/
@@ -399,6 +404,14 @@ int32_t main(void)
     // 初始化Flash管理器
     UARTIF_uartPrintf(0, "Initializing Flash Manager...\n");
     result = flash_manager_init(&g_flash_manager);
+    
+    // 初始化图像接收器
+    image_receiver_init(&g_image_receiver, &g_flash_manager);
+    UARTIF_uartPrintf(0, "Image Receiver initialized!\n");
+    
+    // 初始化图像显示器
+    image_display_init(&g_image_display, &g_flash_manager);
+    UARTIF_uartPrintf(0, "Image Display initialized!\n");
     if (result == FLASH_OK) {
         UARTIF_uartPrintf(0, "Flash Manager initialized successfully!\n");
         
@@ -482,6 +495,37 @@ int32_t main(void)
 
     while(1)
     {
+        // 处理图像接收
+        image_receiver_process(&g_image_receiver);
+        
+        // 检查接收状态
+        if (g_image_receiver.state == IMG_STATE_COMPLETE) {
+            UARTIF_uartPrintf(0, "Image received successfully! ID=%d, Bytes=%d\n", 
+                             g_image_receiver.image_id, g_image_receiver.received_bytes);
+            last_received_image_id = g_image_receiver.image_id;
+            image_receiver_reset(&g_image_receiver);
+            
+            // 自动显示接收到的图像
+            if (g_image_display.state == DISPLAY_STATE_IDLE) {
+                image_display_show(&g_image_display, last_received_image_id);
+            }
+        } else if (g_image_receiver.state == IMG_STATE_ERROR) {
+            UARTIF_uartPrintf(0, "Image reception error! Resetting...\n");
+            image_receiver_reset(&g_image_receiver);
+        }
+        
+        // 处理图像显示
+        image_display_process(&g_image_display);
+        
+        // 检查显示状态
+        if (g_image_display.state == DISPLAY_STATE_COMPLETE) {
+            UARTIF_uartPrintf(0, "Image display completed!\n");
+            image_display_reset(&g_image_display);
+        } else if (g_image_display.state == DISPLAY_STATE_ERROR) {
+            UARTIF_uartPrintf(0, "Image display error! Resetting...\n");
+            image_display_reset(&g_image_display);
+        }
+        
         // Gpio_SetIO(0, 1, 1);               //DC输出高
         // Gpio_SetIO(0, 3, 1);               //RST输出高
         // Gpio_SetIO(0, 2, 1);               //RST输出高
