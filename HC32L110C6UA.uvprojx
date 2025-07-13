@@ -490,6 +490,26 @@
               <FileType>1</FileType>
               <FilePath>.\source\flash_manager.c</FilePath>
             </File>
+            <File>
+              <FileName>global_buffers.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\source\global_buffers.c</FilePath>
+            </File>
+            <File>
+              <FileName>image_display_new.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\source\image_display_new.c</FilePath>
+            </File>
+            <File>
+              <FileName>image_transfer_manager.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\source\image_transfer_manager.c</FilePath>
+            </File>
+            <File>
+              <FileName>crc_utils.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\source\crc_utils.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

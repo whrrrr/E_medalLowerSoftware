@@ -27,7 +27,12 @@
 
 // Segment头魔法数字定义
 #define SEGMENT_HEADER_MAGIC    0xAB        // Segment头标识魔法数字
-#define DATA_PAGE_MAGIC         0xCD        // 数据页标识魔法数字
+#define DATA_PAGE_MAGIC         0xA5        // 普通数据页标识魔法数字
+
+// 图像数据页魔法数字定义（与image_protocol.h保持一致）
+#define MAGIC_BW_IMAGE_DATA     0xB1        // 黑白图像数据页
+#define MAGIC_RED_IMAGE_DATA    0xB2        // 红白图像数据页
+#define MAGIC_IMAGE_HEADER      0xB0        // 图像头页
 
 // 状态魔法数字定义
 #define SEGMENT_MAGIC_ACTIVE    0x12345678  // 激活状态

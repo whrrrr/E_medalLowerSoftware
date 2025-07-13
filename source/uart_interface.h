@@ -4,3 +4,4 @@ void UARTIF_uartInit(void);
 void UARTIF_lpuartInit(void);
 void UARTIF_passThrough(void);
 uint8_t UARTIF_passThroughCmd(void);
+void UARTIF_SendBleData(uint8_t data);

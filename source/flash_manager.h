@@ -29,11 +29,11 @@ typedef struct {
 
 // 数据Page结构（256字节）
 typedef struct {
+    uint8_t  magic;            // 魔法数字（区分数据页类型）
     uint16_t data_id;          // 数据块ID
-    uint8_t  data_size;        // 数据大小（1-240字节）
-    uint8_t  reserved;         // 保留字段
+    uint8_t  data_size;        // 数据大小（1-247字节）
     uint32_t crc32;           // 数据CRC32校验
-    uint8_t  data[248];       // 实际数据
+    uint8_t  data[247];       // 实际数据
 } data_page_t;
 
 // 数据条目映射
@@ -67,10 +67,10 @@ flash_result_t flash_manager_init(flash_manager_t* manager);
  * @param manager Flash管理器指针
  * @param data_id 数据ID
  * @param data 数据指针
- * @param size 数据大小（1-248字节）
+ * @param size 数据大小（1-247字节）
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_write_data(flash_manager_t* manager, uint16_t data_id, const uint8_t* data, uint8_t size);
+flash_result_t flash_write_data(flash_manager_t* manager, uint16_t data_id, const uint8_t* data, uint16_t size);
 
 /**
  * @brief 读取数据
@@ -80,7 +80,7 @@ flash_result_t flash_write_data(flash_manager_t* manager, uint16_t data_id, cons
  * @param size 输入：缓冲区大小，输出：实际数据大小
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_read_data(flash_manager_t* manager, uint16_t data_id, uint8_t* data, uint8_t* size);
+flash_result_t flash_read_data(flash_manager_t* manager, uint16_t data_id, uint8_t* data, uint16_t* size);
 
 /**
  * @brief 删除数据
@@ -113,5 +113,27 @@ flash_result_t flash_get_status(flash_manager_t* manager, uint32_t* used_pages, 
  * @return flash_result_t 操作结果
  */
 flash_result_t flash_force_garbage_collect(flash_manager_t* manager);
+
+/**
+ * @brief 写入图像数据页
+ * @param manager Flash管理器指针
+ * @param magic 魔法数字（区分数据页类型）
+ * @param data_id 数据ID
+ * @param data 数据指针
+ * @param size 数据大小（1-247字节）
+ * @return flash_result_t 操作结果
+ */
+flash_result_t flash_write_image_data_page(flash_manager_t* manager, uint8_t magic, uint16_t data_id, const uint8_t* data, uint8_t size);
+
+/**
+ * @brief 读取图像数据页
+ * @param manager Flash管理器指针
+ * @param data_id 数据ID
+ * @param magic 期望的魔法数字
+ * @param data 数据缓冲区指针
+ * @param size 输入：缓冲区大小，输出：实际数据大小
+ * @return flash_result_t 操作结果
+ */
+flash_result_t flash_read_image_data_page(flash_manager_t* manager, uint16_t data_id, uint8_t expected_magic, uint8_t* data, uint8_t* size);
 
 #endif // FLASH_MANAGER_H

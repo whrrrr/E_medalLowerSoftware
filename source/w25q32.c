@@ -61,7 +61,7 @@ void W25Q32_CS(uint8_t state)
 /* 初始化SPI接口 */
 uint8_t W25Q32_Init(void) 
 {
-	uint32_t id = 0;
+	uint32_t id;
     Gpio_InitIO(1, 4, GpioDirOut);
     Gpio_SetIO(1, 4, 1);               //RST输出高
     
@@ -88,9 +88,11 @@ uint8_t W25Q32_ReadStatusReg(void)
 }
 
 /* 等待Flash就绪 (检查BUSY位) */
-uint8_t W25Q32_WaitForReady(void) 
+uint8_t W25Q32_WaitForReady(void)
 {
-    uint32_t timeout = 10000;  // 超时计数器
+    uint32_t timeout;
+    
+    timeout = 10000;  // 超时计数器
     
     while ((W25Q32_ReadStatusReg() & 0x01) && timeout > 0) {  // BIT0=1表示忙
         delay100us(1);
@@ -107,7 +109,7 @@ uint8_t W25Q32_WaitForReady(void)
 /* 写使能命令 (必须在前置擦除/编程操作前调用) */
 uint8_t W25Q32_WriteEnable(void) 
 {
-	uint8_t status = 0;
+	uint8_t status;
     W25Q32_CS(0);
     Spi_SendData(W25Q32_CMD_WRITE_ENABLE);
     W25Q32_CS(1);
@@ -196,7 +198,7 @@ uint8_t W25Q32_EraseChip(void)
 /* 读取数据 (支持跨页连续读) */
 uint8_t W25Q32_ReadData(uint32_t addr, uint8_t *buf, uint32_t len) 
 {
-    uint32_t i = 0;    
+    uint32_t i;    
     
     // 参数检查
     if (buf == NULL || len == 0) {
@@ -225,7 +227,7 @@ uint8_t W25Q32_ReadData(uint32_t addr, uint8_t *buf, uint32_t len)
 /* 写入数据 (页编程，单次最大256字节) */
 uint8_t W25Q32_WritePage(uint32_t addr, uint8_t *buf, uint16_t len) 
 {
-    uint32_t i = 0;
+    uint32_t i;
     
     // 参数检查
     if (buf == NULL || len == 0) {

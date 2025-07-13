@@ -26,7 +26,7 @@
 #include "base_types.h"
 #include <stdint.h>   // for int16_t, uint8_t, etc.
 #include <math.h>     // 如果需要fabs之类，但也可不用
-#include "image.h"
+
 
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                            

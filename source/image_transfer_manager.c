@@ -1,8 +1,19 @@
 #include "image_transfer_manager.h"
 #include "uart_interface.h"
 #include "w25q32.h"
+#include "flash_manager.h"
 #include <string.h>
 #include "uart.h"
+#include "lpuart.h"
+#include "crc_utils.h"
+#include "spi.h"
+
+// 超时相关变量
+static volatile uint32_t g_timeout_counter = 0;
+static volatile bool g_timeout_flag = false;
+
+#define TIMEOUT_THRESHOLD_MS 1000  // 1秒超时
+#define TIMER_INTERVAL_MS 5        // 5ms定时器间隔
 
 // 外部变量
 extern uint8_t g_flash_buffer[FLASH_PAGE_SIZE];
@@ -12,31 +23,12 @@ static flash_result_t handle_start_frame(image_transfer_manager_t* manager, cons
 static flash_result_t handle_data_frame(image_transfer_manager_t* manager, const data_frame_t* frame);
 static flash_result_t handle_end_frame(image_transfer_manager_t* manager, const end_frame_t* frame);
 static uint8_t parse_protocol_frame(image_transfer_manager_t* manager);
-static flash_result_t write_image_data_page(image_transfer_manager_t* manager);
+static bool write_image_data_page(uint16_t page_id, const uint8_t* data, uint8_t size, uint8_t magic);
 static void send_start_reply(uint8_t command, uint8_t slot_color, uint8_t status);
 static void send_data_reply(uint8_t command, uint8_t slot_color, uint8_t page_seq, uint8_t status);
 static void send_end_reply(uint8_t command, uint8_t slot_color);
 
-/**
- * @brief 计算CRC32
- */
-uint32_t calculate_crc32(const uint8_t* data, uint32_t length)
-{
-    uint32_t crc = 0xFFFFFFFF;
-    uint32_t i, j;
-    
-    for (i = 0; i < length; i++) {
-        crc ^= data[i];
-        for (j = 0; j < 8; j++) {
-            if (crc & 1) {
-                crc = (crc >> 1) ^ CRC32_POLYNOMIAL;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    return ~crc;
-}
+
 
 /**
  * @brief 发送首帧回复
@@ -88,10 +80,12 @@ static void send_end_reply(uint8_t command, uint8_t slot_color)
  */
 void send_reply_frame(const uint8_t* frame_data, uint16_t frame_size)
 {
+    uint16_t i;
+    
     // 通过LPUART发送回复帧
-    for (uint16_t i = 0; i < frame_size; i++) {
+    for (i = 0; i < frame_size; i++) {
         // 这里应该调用实际的LPUART发送函数
-        LPUART_SendData(frame_data[i]);
+        UARTIF_SendBleData(frame_data[i]);
     }
 }
 
@@ -109,8 +103,10 @@ uint16_t get_next_data_id(image_transfer_manager_t* manager)
  */
 uint32_t allocate_flash_page_address(image_transfer_manager_t* manager)
 {
+    uint32_t address;
+    
     // 简化实现：基于当前写入地址分配
-    uint32_t address = manager->flash_mgr->next_write_address;
+    address = manager->flash_mgr->next_write_address;
     manager->flash_mgr->next_write_address += FLASH_PAGE_SIZE;
     return address;
 }
@@ -118,40 +114,15 @@ uint32_t allocate_flash_page_address(image_transfer_manager_t* manager)
 /**
  * @brief 写入图像数据页到Flash
  */
-static flash_result_t write_image_data_page(image_transfer_manager_t* manager)
+static bool write_image_data_page(uint16_t page_id, const uint8_t* data, uint8_t size, uint8_t magic)
 {
-    image_transfer_context_t* ctx = &manager->context;
-    uint32_t page_address = allocate_flash_page_address(manager);
+    extern flash_manager_t g_flash_manager;
+    flash_result_t result;
     
-    // 根据颜色类型创建相应的数据页
-    if (ctx->current_color == COLOR_TYPE_BW) {
-        bw_image_data_page_t* page = (bw_image_data_page_t*)g_flash_buffer;
-        page->magic = MAGIC_BW_IMAGE_DATA;
-        page->frame_seq_id = ctx->current_page;
-        page->header_id = ctx->bw_header_id;
-        page->crc32 = calculate_crc32(ctx->page_buffer, IMAGE_DATA_PER_PAGE);
-        memcpy(page->data, ctx->page_buffer, IMAGE_DATA_PER_PAGE);
-        
-        // 记录页地址
-        ctx->bw_pages_addresses[ctx->current_page - 1] = page_address;
-    } else {
-        red_image_data_page_t* page = (red_image_data_page_t*)g_flash_buffer;
-        page->magic = MAGIC_RED_IMAGE_DATA;
-        page->frame_seq_id = ctx->current_page;
-        page->header_id = ctx->red_header_id;
-        page->crc32 = calculate_crc32(ctx->page_buffer, IMAGE_DATA_PER_PAGE);
-        memcpy(page->data, ctx->page_buffer, IMAGE_DATA_PER_PAGE);
-        
-        // 记录页地址
-        ctx->red_pages_addresses[ctx->current_page - 1] = page_address;
-    }
+    // 使用flash_manager接口写入图像数据页
+    result = flash_write_image_data_page(&g_flash_manager, magic, page_id, data, size);
     
-    // 写入Flash
-    if (W25Q32_WritePage(page_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_WRITE_FAIL;
-    }
-    
-    return FLASH_OK;
+    return (result == FLASH_OK);
 }
 
 /**
@@ -159,7 +130,9 @@ static flash_result_t write_image_data_page(image_transfer_manager_t* manager)
  */
 static flash_result_t handle_start_frame(image_transfer_manager_t* manager, const start_frame_t* frame)
 {
-    image_transfer_context_t* ctx = &manager->context;
+    image_transfer_context_t* ctx;
+    
+    ctx = &manager->context;
     
     // 检查魔法数字
     if (frame->magic != PROTOCOL_MAGIC_HOST || frame->end_magic != PROTOCOL_END_HOST) {
@@ -207,7 +180,15 @@ static flash_result_t handle_start_frame(image_transfer_manager_t* manager, cons
  */
 static flash_result_t handle_data_frame(image_transfer_manager_t* manager, const data_frame_t* frame)
 {
-    image_transfer_context_t* ctx = &manager->context;
+    image_transfer_context_t* ctx;
+	    uint16_t data_size;
+    uint8_t magic;
+    uint16_t page_id;
+    bool result;
+    uint32_t actual_data_size;
+
+    
+    ctx = &manager->context;
     
     // 检查魔法数字
     if (frame->magic != PROTOCOL_MAGIC_HOST || frame->end_magic != PROTOCOL_END_HOST) {
@@ -235,8 +216,8 @@ static flash_result_t handle_data_frame(image_transfer_manager_t* manager, const
     }
     
     // 处理数据
-    uint16_t data_size;
-    if (frame->frame_seq <= 4) {
+        
+        if (frame->frame_seq <= 4) {
         // 前4帧，每帧54字节
         data_size = FRAME_DATA_SIZE;
         memcpy(&ctx->page_buffer[ctx->buffer_pos], frame->data, data_size);
@@ -251,24 +232,26 @@ static flash_result_t handle_data_frame(image_transfer_manager_t* manager, const
         memcpy(&ctx->received_crc, &frame->data[data_size], 4);
         
         // 验证CRC
-        uint32_t actual_data_size = (ctx->current_page == IMAGE_PAGES_PER_COLOR) ? 
-                                   IMAGE_LAST_PAGE_DATA_SIZE : IMAGE_DATA_PER_PAGE;
-        ctx->calculated_crc = calculate_crc32(ctx->page_buffer, actual_data_size);
-        
-        if (ctx->received_crc != ctx->calculated_crc) {
+            actual_data_size = (ctx->current_page == IMAGE_PAGES_PER_COLOR) ? 
+                                       IMAGE_LAST_PAGE_DATA_SIZE : IMAGE_DATA_PER_PAGE;
+            ctx->calculated_crc = calculate_crc32_default(ctx->page_buffer, actual_data_size);
+            
+            if (ctx->received_crc != ctx->calculated_crc) {
+                send_data_reply(frame->command, frame->slot_color, frame->page_seq, DATA_STATUS_CRC_ERROR);
+                // 重置页缓冲区
+                ctx->buffer_pos = 0;
+                ctx->current_frame = 1;
+                memset(ctx->page_buffer, 0, sizeof(ctx->page_buffer));
+                return FLASH_ERROR_CRC_FAIL;
+            }
+            
+            // 写入Flash
+            magic = (ctx->current_color == COLOR_TYPE_BW) ? MAGIC_BW_IMAGE_DATA : MAGIC_RED_IMAGE_DATA;
+            page_id = ctx->current_page;
+            result = write_image_data_page(page_id, ctx->page_buffer, actual_data_size, magic);
+        if (!result) {
             send_data_reply(frame->command, frame->slot_color, frame->page_seq, DATA_STATUS_CRC_ERROR);
-            // 重置页缓冲区
-            ctx->buffer_pos = 0;
-            ctx->current_frame = 1;
-            memset(ctx->page_buffer, 0, sizeof(ctx->page_buffer));
-            return FLASH_ERROR_CRC_FAIL;
-        }
-        
-        // 写入Flash
-        flash_result_t result = write_image_data_page(manager);
-        if (result != FLASH_OK) {
-            send_data_reply(frame->command, frame->slot_color, frame->page_seq, DATA_STATUS_CRC_ERROR);
-            return result;
+            return FLASH_ERROR_WRITE_FAIL;
         }
         
         // 准备下一页
@@ -295,7 +278,10 @@ static flash_result_t handle_data_frame(image_transfer_manager_t* manager, const
  */
 static flash_result_t handle_end_frame(image_transfer_manager_t* manager, const end_frame_t* frame)
 {
-    image_transfer_context_t* ctx = &manager->context;
+    image_transfer_context_t* ctx;
+    flash_result_t result;
+    
+    ctx = &manager->context;
     
     // 检查魔法数字
     if (frame->magic != PROTOCOL_MAGIC_HOST || frame->end_magic != PROTOCOL_END_HOST) {
@@ -309,7 +295,6 @@ static flash_result_t handle_end_frame(image_transfer_manager_t* manager, const 
     }
     
     // 创建图像头页
-    flash_result_t result;
     if (ctx->current_color == COLOR_TYPE_BW) {
         result = create_image_header_page(manager, 1);
         if (result == FLASH_OK) {
@@ -338,21 +323,110 @@ static flash_result_t handle_end_frame(image_transfer_manager_t* manager, const 
 }
 
 /**
+ * @brief 检查是否接收到完整帧
+ */
+static bool check_complete_frame(image_transfer_manager_t* manager)
+{
+	  uint16_t test_magic;
+    uint32_t tail_magic;
+	  uint16_t head_magic;
+
+    int i;
+
+    if (manager->protocol_pos < 8) {
+        return false; // 数据不足，无法检查头魔法数
+    }
+    
+    // 检查头魔法数 0xA5A5
+    
+    head_magic = *(uint16_t*)manager->protocol_buffer;
+    
+    if (head_magic != 0xA5A5) {
+        // 头魔法数不匹配，查找下一个可能的头魔法数
+        for (i = 1; i < manager->protocol_pos - 1; i++) {
+            test_magic = *(uint16_t*)(manager->protocol_buffer + i);
+            if (test_magic == 0xA5A5) {
+                // 找到头魔法数，移动数据
+                memmove(manager->protocol_buffer, manager->protocol_buffer + i, manager->protocol_pos - i);
+                manager->protocol_pos -= i;
+                break;
+            }
+        }
+        if (manager->protocol_pos < 8) {
+            return false;
+        }
+        head_magic = *(uint16_t*)manager->protocol_buffer;
+        if (head_magic != 0xA5A5) {
+            manager->protocol_pos = 0; // 重置缓冲区
+            return false;
+        }
+    }
+    
+    // 检查是否有足够数据包含尾魔法数
+    if (manager->protocol_pos < 12) {
+        return false; // 数据不足，无法检查尾魔法数
+    }
+    
+    // 查找尾魔法数 0xA5A5AFAF
+    for (i = 8; i <= manager->protocol_pos - 4; i++) {
+        tail_magic = *(uint32_t*)(manager->protocol_buffer + i);
+        if (tail_magic == 0xAFAFA5A5) { // 注意字节序
+            // 找到完整帧
+            return true;
+        }
+    }
+    
+    return false; // 未找到完整的尾魔法数
+}
+
+/**
+ * @brief 超时处理函数（由定时器中断调用）
+ */
+void image_transfer_timeout_handler(void)
+{
+    g_timeout_counter++;
+    if (g_timeout_counter >= (TIMEOUT_THRESHOLD_MS / TIMER_INTERVAL_MS)) {
+        g_timeout_flag = true;
+        g_timeout_counter = 0;
+    }
+}
+
+/**
+ * @brief 重置超时计数器
+ */
+static void reset_timeout(void)
+{
+    g_timeout_counter = 0;
+    g_timeout_flag = false;
+}
+
+/**
+ * @brief 检查是否超时
+ */
+static bool is_timeout(void)
+{
+    return g_timeout_flag;
+}
+
+/**
  * @brief 解析协议帧
  */
 static uint8_t parse_protocol_frame(image_transfer_manager_t* manager)
 {
+    uint16_t magic;
+    uint8_t command;
+    
     if (manager->protocol_pos < 8) {
         return 0; // 数据不足
     }
     
-    uint16_t magic = *(uint16_t*)manager->protocol_buffer;
+    magic = *(uint16_t*)manager->protocol_buffer;
     if (magic != PROTOCOL_MAGIC_HOST) {
         manager->protocol_pos = 0;
         return 0;
     }
     
-    uint8_t command = manager->protocol_buffer[2];
+    command = manager->protocol_buffer[2];
     
     switch (command) {
         case CMD_IMAGE_TRANSFER:
@@ -392,8 +466,16 @@ static uint8_t parse_protocol_frame(image_transfer_manager_t* manager)
  */
 flash_result_t create_image_header_page(image_transfer_manager_t* manager, uint8_t is_bw_header)
 {
-    image_transfer_context_t* ctx = &manager->context;
-    image_header_page_t* header = (image_header_page_t*)g_flash_buffer;
+    image_transfer_context_t* ctx;
+    image_header_page_t* header;
+    uint32_t* addresses;
+    int i;
+    extern flash_manager_t g_flash_manager;
+    uint16_t header_id;
+    flash_result_t result;
+    
+    ctx = &manager->context;
+    header = (image_header_page_t*)g_flash_buffer;
     
     // 清空缓冲区
     memset(g_flash_buffer, 0, FLASH_PAGE_SIZE);
@@ -404,8 +486,8 @@ flash_result_t create_image_header_page(image_transfer_manager_t* manager, uint8
     header->reserved1 = 0;
     
     // 填充地址条目
-    uint32_t* addresses = is_bw_header ? ctx->bw_pages_addresses : ctx->red_pages_addresses;
-    for (int i = 0; i < IMAGE_HEADER_ENTRIES; i++) {
+    addresses = is_bw_header ? ctx->bw_pages_addresses : ctx->red_pages_addresses;
+    for (i = 0; i < IMAGE_HEADER_ENTRIES; i++) {
         header->entries[i].frame_seq_id = i + 1;
         header->entries[i].address[0] = (addresses[i] >> 16) & 0xFF;
         header->entries[i].address[1] = (addresses[i] >> 8) & 0xFF;
@@ -417,17 +499,22 @@ flash_result_t create_image_header_page(image_transfer_manager_t* manager, uint8
     header->reserved2 = 0;
     
     // 计算CRC
-    header->crc32 = calculate_crc32((uint8_t*)&header->entries, 
+    header->crc32 = calculate_crc32_default((uint8_t*)&header->entries, 
                                    sizeof(header->entries) + sizeof(header->partner_header_id) + sizeof(header->reserved2));
     
-    // 分配地址并写入Flash
-    uint32_t header_address = allocate_flash_page_address(manager);
-    if (W25Q32_WritePage(header_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_WRITE_FAIL;
+    // 使用flash_manager接口写入图像头页
+    header_id = is_bw_header ? ctx->bw_header_id : ctx->red_header_id;
+    
+    // 将头页数据写入Flash（跳过magic字段，因为flash_write_image_data_page会设置）
+    result = flash_write_image_data_page(&g_flash_manager, MAGIC_IMAGE_HEADER, 
+                                                       header_id, 
+                                                       (uint8_t*)&header->data_id, 
+                                                       sizeof(image_header_page_t) - 1);
+    if (result != FLASH_OK) {
+        return result;
     }
     
-    UARTIF_uartPrintf(0, "Image header page created: ID=%d, Address=0x%08X\n", 
-                     header->data_id, header_address);
+    UARTIF_uartPrintf(0, "Image header page created: ID=%d\n", header->data_id);
     
     return FLASH_OK;
 }
@@ -437,7 +524,9 @@ flash_result_t create_image_header_page(image_transfer_manager_t* manager, uint8
  */
 uint8_t verify_received_pages(image_transfer_manager_t* manager)
 {
-    image_transfer_context_t* ctx = &manager->context;
+    image_transfer_context_t* ctx;
+    
+    ctx = &manager->context;
     
     // 检查是否接收了所有页
     if (ctx->current_page <= IMAGE_PAGES_PER_COLOR) {
@@ -484,21 +573,25 @@ void image_transfer_reset(image_transfer_manager_t* manager)
  */
 flash_result_t image_transfer_process(image_transfer_manager_t* manager)
 {
+    uint8_t data;
+    extern Queue lpUartRecdata;  // 使用uart_interface.c中定义的lpUartRecdata
+    
     if (!manager) {
         return FLASH_ERROR_INVALID_PARAM;
     }
     
-    uint8_t data;
-    
-    // 从队列读取数据
-    while (Queue_Dequeue(manager->rx_queue, &data)) {
+    // 从lpUartRecdata队列读取数据
+    while (Queue_Dequeue(&lpUartRecdata, &data)) {
         // 添加到协议缓冲区
         if (manager->protocol_pos < sizeof(manager->protocol_buffer)) {
             manager->protocol_buffer[manager->protocol_pos++] = data;
             
-            // 尝试解析帧
-            if (parse_protocol_frame(manager)) {
-                manager->last_activity_time = 0; // 重置超时计数
+            // 检查是否接收到完整帧（头魔法数0xA5A5和尾魔法数0xA5A5AFAF）
+            if (check_complete_frame(manager)) {
+                // 尝试解析帧
+                if (parse_protocol_frame(manager)) {
+                    reset_timeout(); // 重置超时计数
+                }
             }
         } else {
             // 缓冲区溢出，重置
@@ -506,15 +599,16 @@ flash_result_t image_transfer_process(image_transfer_manager_t* manager)
         }
     }
     
-    // 超时处理
-    // TI DO 加入计时器
-    manager->last_activity_time++;
-    if (manager->last_activity_time > 1000) { // 假设1000个周期为超时
+    // 检查超时
+    if (is_timeout()) {
+        // 超时处理：重置传输状态
         if (manager->context.state != IMG_TRANSFER_IDLE) {
-            UARTIF_uartPrintf(0, "Transfer timeout, resetting...\n");
-            image_transfer_reset(manager);
+            UARTIF_uartPrintf(0, "Image transfer timeout, resetting...\n");
+            manager->context.state = IMG_TRANSFER_IDLE;
+            manager->protocol_pos = 0;
+            memset(manager->protocol_buffer, 0, sizeof(manager->protocol_buffer));
+            reset_timeout();
         }
-        manager->last_activity_time = 0;
     }
     
     return FLASH_OK;

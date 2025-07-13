@@ -42,19 +42,18 @@ flash_result_t image_transfer_process(image_transfer_manager_t* manager);
 void image_transfer_reset(image_transfer_manager_t* manager);
 
 /**
+ * @brief 超时处理函数（由定时器中断调用）
+ */
+void image_transfer_timeout_handler(void);
+
+/**
  * @brief 发送回复帧
  * @param frame_data 帧数据指针
  * @param frame_size 帧大小
  */
 void send_reply_frame(const uint8_t* frame_data, uint16_t frame_size);
 
-/**
- * @brief 计算CRC32
- * @param data 数据指针
- * @param length 数据长度
- * @return uint32_t CRC32值
- */
-uint32_t calculate_crc32(const uint8_t* data, uint32_t length);
+
 
 /**
  * @brief 获取下一个可用的数据ID

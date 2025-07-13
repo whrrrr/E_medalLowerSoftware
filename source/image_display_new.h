@@ -86,10 +86,18 @@ flash_result_t load_image_header(image_display_new_t* display, uint16_t header_i
  * @param buffer 输出缓冲区
  * @return flash_result_t 操作结果
  */
-flash_result_t load_image_data_page(image_display_new_t* display, uint32_t page_address, uint8_t* buffer);
+// 函数已改为静态函数，不再需要在头文件中声明
 
 /**
- * @brief 将图像数据显示到EPD
+ * @brief 将图像数据显示到EPD（流式处理版本）
+ * 
+ * @param display 图像显示器指针
+ * @return flash_result_t 操作结果
+ */
+flash_result_t display_image_to_epd_streaming(image_display_new_t* display);
+
+/**
+ * @brief 将图像数据显示到EPD（兼容性函数，已弃用）
  * 
  * @param bw_data 黑白图像数据
  * @param red_data 红白图像数据

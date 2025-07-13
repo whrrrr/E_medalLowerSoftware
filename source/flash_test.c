@@ -1,5 +1,6 @@
 #include "flash_manager.h"
 #include "uart_interface.h"
+#include "global_buffers.h"
 #include <string.h>
 
 // 全局Flash管理器实例
@@ -10,13 +11,19 @@ extern flash_manager_t g_flash_manager;
  */
 void flash_manager_test(void)
 {
-    // 1. 基本写入测试
-    UARTIF_uartPrintf(0, "\n=== Flash Manager Test ===\n");
-    
     uint8_t test_data[] = "Test data for flash manager";
-    uint8_t read_buffer[256];
+    uint8_t* read_buffer = g_general_buffer_256; // 使用全局缓冲区
     uint8_t read_size;
     flash_result_t result;
+    uint8_t* large_data;
+    uint8_t verify_ok;
+    uint16_t i;
+    uint8_t new_data[] = "Updated test data";
+    uint8_t batch_data[] = "Batch test data";
+    uint32_t used_pages, free_pages, data_count;
+    
+    // 1. 基本写入测试
+    UARTIF_uartPrintf(0, "\n=== Flash Manager Test ===\n");
     
     UARTIF_uartPrintf(0, "1. Basic write test...\n");
     result = flash_write_data(&g_flash_manager, 0x2001, test_data, (uint8_t)(strlen((char*)test_data) + 1));
@@ -36,8 +43,8 @@ void flash_manager_test(void)
     
     // 2. 大数据写入测试
     UARTIF_uartPrintf(0, "\n2. Large data write test...\n");
-    uint8_t large_data[200];
-    memset(large_data, 0xAA, sizeof(large_data));
+    large_data = g_general_buffer_200; // 使用全局缓冲区
+    memset(large_data, 0xAA, 200);
     
     result = flash_write_data(&g_flash_manager, 0x2002, large_data, 200);
     if (result == FLASH_OK) {
@@ -48,8 +55,7 @@ void flash_manager_test(void)
         if (result == FLASH_OK) {
             UARTIF_uartPrintf(0, "   Large read success (size: %d)\n", read_size);
             // 验证数据
-            uint8_t verify_ok = 1;
-            uint16_t i;
+            verify_ok = 1;
             for (i = 0; i < read_size; i++) {
                 if (read_buffer[i] != 0xAA) {
                     verify_ok = 0;
@@ -66,7 +72,6 @@ void flash_manager_test(void)
     
     // 3. 数据覆盖测试
     UARTIF_uartPrintf(0, "\n3. Data overwrite test...\n");
-    uint8_t new_data[] = "Updated test data";
     
     result = flash_write_data(&g_flash_manager, 0x2001, new_data, (uint8_t)(strlen((char*)new_data) + 1));
     if (result == FLASH_OK) {
@@ -103,7 +108,6 @@ void flash_manager_test(void)
     
     // 5. 批量写入测试
     UARTIF_uartPrintf(0, "\n5. Batch write test...\n");
-    uint8_t batch_data[] = "Batch test data";
     for (i = 0x3001; i <= 0x3005; i++) {
         result = flash_write_data(&g_flash_manager, i, batch_data, (uint8_t)(strlen((char*)batch_data) + 1));
         if (result == FLASH_OK) {
@@ -115,7 +119,6 @@ void flash_manager_test(void)
     
     // 6. 状态查询测试
     UARTIF_uartPrintf(0, "\n6. Status query test...\n");
-    uint32_t used_pages, free_pages, data_count;
     result = flash_get_status(&g_flash_manager, &used_pages, &free_pages, &data_count);
     if (result == FLASH_OK) {
         UARTIF_uartPrintf(0, "   Used pages: %d\n", used_pages);
@@ -135,6 +138,8 @@ void flash_gc_test(void)
 {
     flash_result_t result;
     uint32_t used_pages, free_pages, data_count;
+    uint8_t* read_buffer;
+    uint8_t read_size;
     
     UARTIF_uartPrintf(0, "\n=== Garbage Collection Test Start ===\n");
     
@@ -158,8 +163,8 @@ void flash_gc_test(void)
         
         // 验证数据是否仍然可读
         UARTIF_uartPrintf(0, "Verifying data after GC...\n");
-        uint8_t read_buffer[248];
-        uint8_t read_size = sizeof(read_buffer);
+        read_buffer = g_general_buffer_248; // 使用全局缓冲区
+        read_size = 248;
         result = flash_read_data(&g_flash_manager, 0x2001, read_buffer, &read_size);
         if (result == FLASH_OK) {
             UARTIF_uartPrintf(0, "Data verification after GC: %s\n", read_buffer);

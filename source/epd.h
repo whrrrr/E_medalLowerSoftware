@@ -10,6 +10,11 @@
 #define WIDTH WIDTH_420
 #define HEIGHT HEIGHT_420
 #define BYTES_PER_ROW (WIDTH / 8)
+#define DC_H    Gpio_SetIO(0, 1, 1) //DC输出高
+#define DC_L    Gpio_SetIO(0, 1, 0) //DC输出低
+#define RST_H   Gpio_SetIO(0, 3, 1) //RST输出高
+#define RST_L   Gpio_SetIO(0, 3, 0) //RST输出低
+
 
 void EPD_initWft0154cz17(boolean_t isfull);
 void EPD_poweroff(void);

@@ -38,13 +38,13 @@
 #include "queue.h"
 #include "uart_interface.h"
 #include "e104.h"
-#include "image.h"
 #include "lpt.h"
 #include "lpm.h"
 #include "w25q32.h"
 #include "flash_manager.h"
 #include "image_transfer_manager.h"
 #include "image_display_new.h"
+#include "global_buffers.h"
 // #include "flash_test.h"
 
 /******************************************************************************
@@ -72,14 +72,15 @@ static volatile boolean_t tg1 = FALSE;
 static volatile boolean_t wakeup = FALSE;
 static volatile boolean_t tg8s = FALSE;
 // static volatile boolean_t tg2s = FALSE;
-static float temperature = 0.0, humidity = 0.0;
-static boolean_t linkFlag = FALSE;
-static flash_manager_t g_flash_manager;
+//static float temperature = 0.0, humidity = 0.0;
+//static boolean_t linkFlag = FALSE;
+flash_manager_t g_flash_manager;
 static image_transfer_manager_t g_image_transfer_manager;
 static image_display_new_t g_image_display;
 static uint8_t read_buffer[64];
 static uint8_t test_data[] = "Hello Flash Manager!";
 extern Queue lpUartRecdata;
+
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                             
  ******************************************************************************/
@@ -89,7 +90,6 @@ extern Queue lpUartRecdata;
  ******************************************************************************/
 uint8_t cmd[3] = {0xAC,0x33,0x00};
 uint8_t u8Recdata[8]={0x00};
-static uint8_t buffer[256];
 
 void Bt0Int(void)
 {
@@ -116,6 +116,9 @@ void Bt0Int(void)
     {
         tg1 = TRUE;
     }
+    
+    // 调用图像传输超时处理函数（5ms间隔）
+    image_transfer_timeout_handler();
 }
 
 void LptInt(void)
@@ -195,7 +198,9 @@ static void lpmInit(void)
 {
     stc_lpt_config_t stcConfig;
     stc_lpm_config_t stcLpmCfg;
-    uint16_t         u16ArrData = 0;
+    uint16_t         u16ArrData;
+    
+    u16ArrData = 0;
 
     Clk_Enable(ClkRCL, TRUE);
     //使能Lpt、GPIO外设时钟
@@ -231,17 +236,17 @@ static void lpmInit(void)
 
 }
 
-static void task3(void)
-{
-    if (tg1) // 10ms
-    {
-        tg1 = FALSE;
-        UARTIF_passThrough();
-        (void)E104_getLinkState();
-        // (void)E104_getDataState();
-        E104_executeCommand();
-    }
-}
+//static void task3(void)
+//{
+//    if (tg1) // 10ms
+//    {
+//        tg1 = FALSE;
+//        UARTIF_passThrough();
+//        (void)E104_getLinkState();
+//        // (void)E104_getDataState();
+//        E104_executeCommand();
+//    }
+//}
 
 // static void task1(void)
 // {
@@ -251,35 +256,35 @@ static void task3(void)
 //     DRAW_outputScreen();
 // }
 
-static void task0(void)
-{
-    temperature = 12.34;
-    humidity = 56.78;
-    UARTIF_uartPrintfFloat(0, "Temperature is ",temperature);
-    UARTIF_uartPrintfFloat(0, "Humidity is ",humidity);
+//static void task0(void)
+//{
+//    temperature = 12.34;
+//    humidity = 56.78;
+//    UARTIF_uartPrintfFloat(0, "Temperature is ",temperature);
+//    UARTIF_uartPrintfFloat(0, "Humidity is ",humidity);
 
-    if (E104_getLinkState())
-    {
-        UARTIF_uartPrintfFloat(2, "Temperature is ",temperature);
-        UARTIF_uartPrintfFloat(2, "Humidity is ",humidity);
-        if (!linkFlag)
-        {
-            linkFlag = TRUE;
-        }
-    }
-    else
-    {
-        if (linkFlag)
-        {
-            linkFlag = FALSE;
-            E104_setWakeUpMode();
+//    if (E104_getLinkState())
+//    {
+//        UARTIF_uartPrintfFloat(2, "Temperature is ",temperature);
+//        UARTIF_uartPrintfFloat(2, "Humidity is ",humidity);
+//        if (!linkFlag)
+//        {
+//            linkFlag = TRUE;
+//        }
+//    }
+//    else
+//    {
+//        if (linkFlag)
+//        {
+//            linkFlag = FALSE;
+//            E104_setWakeUpMode();
 
-            delay1ms(30);
-            E104_setSleepMode();
-        }
+//            delay1ms(30);
+//            E104_setSleepMode();
+//        }
 
-    }
-}
+//    }
+//}
 
 static void handleClearEpdEvent(void)
 {
@@ -351,11 +356,16 @@ int32_t main(void)
 //    uint8_t data = 0;
 //   uint8_t crc = 0;
 //    boolean_t trig1s = FALSE;
-	flash_result_t result = FLASH_OK;
-    uint32_t chipId = 0;
-   uint16_t i = 0;
-    uint8_t read_size = sizeof(read_buffer);
+	flash_result_t result;
+    uint32_t chipId;
+//   uint16_t i;
+    uint16_t read_size;
 	 uint32_t used_pages, free_pages, data_count;
+    
+    result = FLASH_OK;
+    chipId = 0;
+//    i = 0;
+    read_size = sizeof(read_buffer);
     UARTIF_uartInit();
     // i2cInit();
     UARTIF_lpuartInit();
@@ -364,35 +374,9 @@ int32_t main(void)
     delay1ms(30);
     E104_setSleepMode();
 
-    // while (data != 0x36)
-    // {
-    //     UARTIF_uartPrintf(0, "Input 6 to start.\n");
-    //     data = Uart_ReceiveData(UARTCH1);
-    //     delay1ms(500);
-    // }
     timInit();
     // EPD_initWft0154cz17(TRUE);
     EPD_initGDEY042Z98();
-    // Gpio_InitIO(0, 1, GpioDirOut);
-    // Gpio_SetIO(0, 1, 1);               //DC输出高
-
-    // Gpio_InitIO(0, 2, GpioDirOut);
-    // Gpio_SetIO(0, 2, 1);               //RST输出高
-
-    // Gpio_InitIO(0, 3, GpioDirOut);
-    // Gpio_SetIO(0, 3, 1);               //RST输出高
-
-
-    // Gpio_InitIO(1, 4, GpioDirOut);
-    // Gpio_SetIO(1, 4, 1);               //DC输出高
-
-    // Gpio_InitIO(1, 5, GpioDirOut);
-    // Gpio_SetIO(1, 5, 1);               //DC输出高
-
-    // Gpio_InitIO(2, 3, GpioDirOut);
-    // Gpio_SetIO(2, 3, 0);               //
-    // Gpio_InitIO(2, 4, GpioDirOut);
-    // Gpio_SetIO(2, 4, 0);               //
     
     UARTIF_uartPrintf(0, "Done! \n");
     delay1ms(100);
@@ -491,15 +475,15 @@ int32_t main(void)
 //     while(sts & 0x01);
 
 //    // 读取验证
-   UARTIF_uartPrintf(0, "Read page 0! \n");
-   memset(buffer, 0, 256);
-   W25Q32_ReadData(0x000000, buffer, 256);
-   delay1ms(100);
-   for (;i<256;i++)
-   {
-       UARTIF_uartPrintf(0, "Byte %d is 0x%x! \n", i,buffer[i]);
-       delay1ms(1);
-   }
+//   UARTIF_uartPrintf(0, "Read page 0! \n");
+//   memset(buffer, 0, 256);
+//   W25Q32_ReadData(0x000000, buffer, 256);
+//   delay1ms(100);
+//   for (;i<256;i++)
+//   {
+//       UARTIF_uartPrintf(0, "Byte %d is 0x%x! \n", i,buffer[i]);
+//       delay1ms(1);
+//   }
 
 	UARTIF_uartPrintf(0, "Goto while ! \n");
 

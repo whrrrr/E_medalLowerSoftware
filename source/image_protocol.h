@@ -17,11 +17,11 @@
 #define IMAGE_LAST_PAGE_DATA_SIZE   120     // 最后一页的数据大小
 #define IMAGE_HEADER_ENTRIES        61      // 头页中的地址条目数
 
-// 魔法数字定义
+// 魔法数字定义（与flash_config.h保持一致）
 #define MAGIC_NORMAL_DATA           0xA5    // 普通数据页
-#define MAGIC_BW_IMAGE_DATA         0xA6    // 黑白图像数据页
-#define MAGIC_RED_IMAGE_DATA        0xA7    // 红白图像数据页
-#define MAGIC_IMAGE_HEADER          0xA8    // 图像头页
+#define MAGIC_BW_IMAGE_DATA         0xB1    // 黑白图像数据页
+#define MAGIC_RED_IMAGE_DATA        0xB2    // 红白图像数据页
+#define MAGIC_IMAGE_HEADER          0xB0    // 图像头页
 
 // 传输协议魔法数字
 #define PROTOCOL_MAGIC_HOST         0xA5A5  // 上位机发送魔法数
@@ -65,7 +65,7 @@ typedef struct {
 
 // 黑白图像数据页结构（256字节）
 typedef struct {
-    uint8_t magic;              // 魔法数字 0xA6
+    uint8_t magic;              // 魔法数字 0xB1
     uint8_t frame_seq_id;       // 帧数据序列ID (1-61)
     uint16_t header_id;         // 头数据块ID
     uint32_t crc32;             // CRC32校验
@@ -74,7 +74,7 @@ typedef struct {
 
 // 红白图像数据页结构（256字节）
 typedef struct {
-    uint8_t magic;              // 魔法数字 0xA7
+    uint8_t magic;              // 魔法数字 0xB2
     uint8_t frame_seq_id;       // 帧数据序列ID (1-61)
     uint16_t header_id;         // 头数据块ID
     uint32_t crc32;             // CRC32校验
@@ -89,7 +89,7 @@ typedef struct {
 
 // 图像头页结构（256字节）
 typedef struct {
-    uint8_t magic;              // 魔法数字 0xA8
+    uint8_t magic;              // 魔法数字 0xB0
     uint16_t data_id;           // 数据块ID
     uint8_t reserved1;          // 保留字段
     uint32_t crc32;             // CRC32校验
