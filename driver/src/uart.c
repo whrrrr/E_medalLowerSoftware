@@ -251,18 +251,18 @@ en_result_t Uart_SetMultiMode(uint8_t u8Idx,stc_uart_multimode_t* pstcMultiConfi
  ** \retval OK配置成功
  **\retval ErrorInvalidParameter配置失败
  ******************************************************************************/
-en_result_t Uart_SetMMDOrCk(uint8_t u8Idx,en_uart_mmdorck_t enTb8)
-{
-    stc_uart_instance_data_t *pstcData = NULL;
-    ASSERT(IS_VALID_CH(u8Idx));
-    pstcData = UartGetInternDataPtr(u8Idx);
-    if (NULL == pstcData)
-    {
-        return ErrorInvalidParameter;
-    }
-    pstcData->pstcInstance->SCON_f.TB8 = enTb8;
-    return Ok;
-}
+// en_result_t Uart_SetMMDOrCk(uint8_t u8Idx,en_uart_mmdorck_t enTb8)
+// {
+//     stc_uart_instance_data_t *pstcData = NULL;
+//     ASSERT(IS_VALID_CH(u8Idx));
+//     pstcData = UartGetInternDataPtr(u8Idx);
+//     if (NULL == pstcData)
+//     {
+//         return ErrorInvalidParameter;
+//     }
+//     pstcData->pstcInstance->SCON_f.TB8 = enTb8;
+//     return Ok;
+// }
 /**
  ******************************************************************************
  ** \brief 获取RB8数值
@@ -272,17 +272,17 @@ en_result_t Uart_SetMMDOrCk(uint8_t u8Idx,en_uart_mmdorck_t enTb8)
  ** \retval RB8
  **\retval ErrorInvalidParameter配置失败
  ******************************************************************************/
-boolean_t Uart_GetRb8(uint8_t u8Idx)
-{
-     stc_uart_instance_data_t *pstcData = NULL;
-    ASSERT(IS_VALID_CH(u8Idx));
-    pstcData = UartGetInternDataPtr(u8Idx);
-    if (NULL == pstcData)
-    {
-        return ErrorInvalidParameter;
-    }
-    return (pstcData->pstcInstance->SCON_f.RB8);
-}
+// boolean_t Uart_GetRb8(uint8_t u8Idx)
+// {
+//      stc_uart_instance_data_t *pstcData = NULL;
+//     ASSERT(IS_VALID_CH(u8Idx));
+//     pstcData = UartGetInternDataPtr(u8Idx);
+//     if (NULL == pstcData)
+//     {
+//         return ErrorInvalidParameter;
+//     }
+//     return (pstcData->pstcInstance->SCON_f.RB8);
+// }
 /**
  ******************************************************************************
  ** \brief 计算字节数据1的个数
@@ -291,110 +291,110 @@ boolean_t Uart_GetRb8(uint8_t u8Idx)
  **
  ** \retval 个数
  ******************************************************************************/
-en_result_t Uart_SetTb8(uint8_t u8Idx,en_uart_check_t enCheck,uint8_t u8Data)
-{
-	uint8_t cnt=0,i;
-	stc_uart_instance_data_t *pstcData = NULL;
-    ASSERT(IS_VALID_CH(u8Idx));
-    pstcData = UartGetInternDataPtr(u8Idx);
-    if (NULL == pstcData)
-    {
-        return ErrorInvalidParameter;
-    }	
-	for(i=0;i<8;i++)
-	{
-		if((u8Data&0x80)==0x80)
-		{
-			cnt++;
-		}
-		u8Data<<=1;
-	}
-	if(enCheck == Even)
-	{
-		if(cnt%2!=0)
-		{
-			pstcData->pstcInstance->SCON_f.TB8 = 1;
-		}
-		else
-		{
-			pstcData->pstcInstance->SCON_f.TB8 = 0;
-		}
-	}
-	else
-	{
-		if(cnt%2!=0)
-		{
-			pstcData->pstcInstance->SCON_f.TB8 = 0;
-		}
-		else
-		{
-			pstcData->pstcInstance->SCON_f.TB8 = 1;
-		}
-	}
-	return Ok;
-}
-/**
- ******************************************************************************
- ** \brief 计算接收字节奇偶校验是否正确
- **
- ** \param u8Idx通道，enCheck奇偶校验方式，u8Recv校验数据
- **
- ** \retval Error或者成功Ok
- ******************************************************************************/
-en_result_t Uart_CheckEvenOrOdd(uint8_t u8Idx,en_uart_check_t enCheck,uint8_t u8Recv)
-{
-	uint8_t cnt=0,i;
-	stc_uart_instance_data_t *pstcData = NULL;
-    ASSERT(IS_VALID_CH(u8Idx));
-    pstcData = UartGetInternDataPtr(u8Idx);
-    if (NULL == pstcData)
-    {
-        return ErrorInvalidParameter;
-    }
-	for(i=0;i<8;i++)
-	{
-		if((u8Recv&0x80)==0x80)
-		{
-			cnt++;
-		}
-		u8Recv<<=1;
-	}
-	if(enCheck == Even)
-	{
-		if(cnt%2!=0)
-		{
-			if(pstcData->pstcInstance->SCON_f.RB8 != 1)
-			{
-				return Error;
-			}
-		}
-		else
-		{
-			if(pstcData->pstcInstance->SCON_f.RB8 != 0)
-			{
-				return Error;
-			}
-		}
-	}
-	else
-	{
-		if(cnt%2!=0)
-		{
-			if(pstcData->pstcInstance->SCON_f.RB8 != 0)
-			{
-				return Error;
-			}
-		}
-		else
-		{
-			if(pstcData->pstcInstance->SCON_f.RB8 != 1)
-			{
-				return Error;
-			}
-		}
-	}
-	return Ok;
-}
+// en_result_t Uart_SetTb8(uint8_t u8Idx,en_uart_check_t enCheck,uint8_t u8Data)
+// {
+// 	uint8_t cnt=0,i;
+// 	stc_uart_instance_data_t *pstcData = NULL;
+//     ASSERT(IS_VALID_CH(u8Idx));
+//     pstcData = UartGetInternDataPtr(u8Idx);
+//     if (NULL == pstcData)
+//     {
+//         return ErrorInvalidParameter;
+//     }	
+// 	for(i=0;i<8;i++)
+// 	{
+// 		if((u8Data&0x80)==0x80)
+// 		{
+// 			cnt++;
+// 		}
+// 		u8Data<<=1;
+// 	}
+// 	if(enCheck == Even)
+// 	{
+// 		if(cnt%2!=0)
+// 		{
+// 			pstcData->pstcInstance->SCON_f.TB8 = 1;
+// 		}
+// 		else
+// 		{
+// 			pstcData->pstcInstance->SCON_f.TB8 = 0;
+// 		}
+// 	}
+// 	else
+// 	{
+// 		if(cnt%2!=0)
+// 		{
+// 			pstcData->pstcInstance->SCON_f.TB8 = 0;
+// 		}
+// 		else
+// 		{
+// 			pstcData->pstcInstance->SCON_f.TB8 = 1;
+// 		}
+// 	}
+// 	return Ok;
+// }
+// /**
+//  ******************************************************************************
+//  ** \brief 计算接收字节奇偶校验是否正确
+//  **
+//  ** \param u8Idx通道，enCheck奇偶校验方式，u8Recv校验数据
+//  **
+//  ** \retval Error或者成功Ok
+//  ******************************************************************************/
+// en_result_t Uart_CheckEvenOrOdd(uint8_t u8Idx,en_uart_check_t enCheck,uint8_t u8Recv)
+// {
+// 	uint8_t cnt=0,i;
+// 	stc_uart_instance_data_t *pstcData = NULL;
+//     ASSERT(IS_VALID_CH(u8Idx));
+//     pstcData = UartGetInternDataPtr(u8Idx);
+//     if (NULL == pstcData)
+//     {
+//         return ErrorInvalidParameter;
+//     }
+// 	for(i=0;i<8;i++)
+// 	{
+// 		if((u8Recv&0x80)==0x80)
+// 		{
+// 			cnt++;
+// 		}
+// 		u8Recv<<=1;
+// 	}
+// 	if(enCheck == Even)
+// 	{
+// 		if(cnt%2!=0)
+// 		{
+// 			if(pstcData->pstcInstance->SCON_f.RB8 != 1)
+// 			{
+// 				return Error;
+// 			}
+// 		}
+// 		else
+// 		{
+// 			if(pstcData->pstcInstance->SCON_f.RB8 != 0)
+// 			{
+// 				return Error;
+// 			}
+// 		}
+// 	}
+// 	else
+// 	{
+// 		if(cnt%2!=0)
+// 		{
+// 			if(pstcData->pstcInstance->SCON_f.RB8 != 0)
+// 			{
+// 				return Error;
+// 			}
+// 		}
+// 		else
+// 		{
+// 			if(pstcData->pstcInstance->SCON_f.RB8 != 1)
+// 			{
+// 				return Error;
+// 			}
+// 		}
+// 	}
+// 	return Ok;
+// }
 /**
  ******************************************************************************
  ** \brief  UART通道多主机模式从机地址配置函数
@@ -404,39 +404,39 @@ en_result_t Uart_CheckEvenOrOdd(uint8_t u8Idx,en_uart_check_t enCheck,uint8_t u8
  ** \retval OK配置成功
  **\retval ErrorInvalidParameter配置失败
  ******************************************************************************/
-en_result_t Uart_SetSaddr(uint8_t u8Idx,uint8_t u8Addr)
-{
-    stc_uart_instance_data_t *pstcData = NULL;
-    ASSERT(IS_VALID_CH(u8Idx));
-    pstcData = UartGetInternDataPtr(u8Idx);
-    if (NULL == pstcData)
-    {
-        return ErrorInvalidParameter;
-    }
-    pstcData->pstcInstance->SADDR = u8Addr;
-    return Ok;
-}
-/**
- ******************************************************************************
- ** \brief  UART通道多主机模式从机掩码配置函数
- **
- ** \param [in] u8Idx通道号，addren地址掩码
- **
- ** \retval OK配置成功
- **\retval ErrorInvalidParameter配置失败
- ******************************************************************************/
-en_result_t Uart_SetSaddrEn(uint8_t u8Idx,uint8_t u8Addren)
-{
-    stc_uart_instance_data_t *pstcData = NULL;
-    ASSERT(IS_VALID_CH(u8Idx));
-    pstcData = UartGetInternDataPtr(u8Idx);
-    if (NULL == pstcData)
-    {
-        return ErrorInvalidParameter;
-    }
-    pstcData->pstcInstance->SADEN = u8Addren;
-    return Ok;  
-}
+// en_result_t Uart_SetSaddr(uint8_t u8Idx,uint8_t u8Addr)
+// {
+//     stc_uart_instance_data_t *pstcData = NULL;
+//     ASSERT(IS_VALID_CH(u8Idx));
+//     pstcData = UartGetInternDataPtr(u8Idx);
+//     if (NULL == pstcData)
+//     {
+//         return ErrorInvalidParameter;
+//     }
+//     pstcData->pstcInstance->SADDR = u8Addr;
+//     return Ok;
+// }
+// /**
+//  ******************************************************************************
+//  ** \brief  UART通道多主机模式从机掩码配置函数
+//  **
+//  ** \param [in] u8Idx通道号，addren地址掩码
+//  **
+//  ** \retval OK配置成功
+//  **\retval ErrorInvalidParameter配置失败
+//  ******************************************************************************/
+// en_result_t Uart_SetSaddrEn(uint8_t u8Idx,uint8_t u8Addren)
+// {
+//     stc_uart_instance_data_t *pstcData = NULL;
+//     ASSERT(IS_VALID_CH(u8Idx));
+//     pstcData = UartGetInternDataPtr(u8Idx);
+//     if (NULL == pstcData)
+//     {
+//         return ErrorInvalidParameter;
+//     }
+//     pstcData->pstcInstance->SADEN = u8Addren;
+//     return Ok;  
+// }
 /**
  ******************************************************************************
  ** \brief  UART通道波特率配置

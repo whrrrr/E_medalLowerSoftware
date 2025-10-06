@@ -24,10 +24,12 @@
 #include "spi.h"
 #include "ddl.h"
 #include "w25q32.h"
+#include "uart_interface.h"
 
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                            
  ******************************************************************************/
+#define FLASH_TOTAL_SIZE        0x400000    // 4MB总容量
 
 /******************************************************************************
  * Global variable definitions (declared in header file with 'extern')
@@ -59,19 +61,10 @@ void W25Q32_CS(uint8_t state)
 }
 
 /* 初始化SPI接口 */
-uint8_t W25Q32_Init(void) 
+void W25Q32_Init(void) 
 {
-	uint32_t id;
     Gpio_InitIO(1, 4, GpioDirOut);
     Gpio_SetIO(1, 4, 1);               //RST输出高
-    
-    // 检查Flash是否正常响应
-     id = W25Q32_ReadID();
-    if (id == 0x00000000 || id == 0xFFFFFFFF) {
-        return W25Q32_ERROR;  // Flash未正常响应
-    }
-    
-    return W25Q32_OK;
 }
 
 /* 读取状态寄存器1 (BUSY位在bit0) */
@@ -87,40 +80,47 @@ uint8_t W25Q32_ReadStatusReg(void)
     return status;
 }
 
-/* 等待Flash就绪 (检查BUSY位) */
-uint8_t W25Q32_WaitForReady(void)
+/* 读取状态寄存器2 */
+uint8_t W25Q32_ReadStatusReg2(void)
 {
-    uint32_t timeout;
+    uint8_t status;
     
-    timeout = 10000;  // 超时计数器
+    W25Q32_CS(0);
+    Spi_SendData(W25Q32_CMD_READ_STATUS_REG2);
+    status = Spi_ReceiveData();
+    W25Q32_CS(1);
     
-    while ((W25Q32_ReadStatusReg() & 0x01) && timeout > 0) {  // BIT0=1表示忙
+    return status;
+}
+
+/* 读取状态寄存器3 */
+uint8_t W25Q32_ReadStatusReg3(void)
+{
+    uint8_t status;
+    
+    W25Q32_CS(0);
+    Spi_SendData(W25Q32_CMD_READ_STATUS_REG3);
+    status = Spi_ReceiveData();
+    W25Q32_CS(1);
+    
+    return status;
+}
+
+/* 等待Flash就绪 (检查BUSY位) */
+void W25Q32_WaitForReady(void) 
+{
+    while (W25Q32_ReadStatusReg() & 0x01) {  // BIT0=1表示忙
         delay100us(1);
-        timeout--;
     }
-    
-    if (timeout == 0) {
-        return W25Q32_ERROR;  // 超时错误
-    }
-    
-    return W25Q32_OK;
 }
 
 /* 写使能命令 (必须在前置擦除/编程操作前调用) */
-uint8_t W25Q32_WriteEnable(void) 
+void W25Q32_WriteEnable(void) 
 {
-	uint8_t status;
+    
     W25Q32_CS(0);
     Spi_SendData(W25Q32_CMD_WRITE_ENABLE);
     W25Q32_CS(1);
-    
-    // 检查写使能位是否设置成功
-     status = W25Q32_ReadStatusReg();
-    if ((status & 0x02) == 0) {  // BIT1=0表示写使能失败
-        return W25Q32_ERROR;
-    }
-    
-    return W25Q32_OK;
 }
 
 void W25Q32_WriteDisable(void) 
@@ -148,133 +148,181 @@ uint32_t W25Q32_ReadID(void)
 }
 
 /* 扇区擦除 (4KB) */
-uint8_t W25Q32_EraseSector(uint32_t sectorAddr) 
+void W25Q32_EraseSector(uint32_t sectorAddr) 
 {    
-    // 检查地址有效性
-    if (sectorAddr >= W25Q32_TOTAL_SIZE) {
-        return W25Q32_ERROR;
-    }
+       uint8_t sts = 0;
 
-    // 使能写操作
-    if (W25Q32_WriteEnable() != W25Q32_OK) {
-        return W25Q32_ERROR;
-    }
-    
+    W25Q32_WriteEnable();          // 使能写操作
     W25Q32_CS(0);
+
     Spi_SendData(W25Q32_CMD_SECTOR_ERASE);
     Spi_SendData((uint8_t)((sectorAddr >> 16) & 0xFF));
     Spi_SendData((uint8_t)((sectorAddr >> 8) & 0xFF));
     Spi_SendData((uint8_t)(sectorAddr & 0xFF));
+
+    UARTIF_uartPrintf(0, "Waiting for erase sector .");
+
     W25Q32_CS(1);
-    
-    // 等待擦除完成
-    if (W25Q32_WaitForReady() != W25Q32_OK) {
-        return W25Q32_ERROR;
+    do 
+    {
+        sts = W25Q32_ReadStatusReg();
+        // UARTIF_uartPrintf(0, "Status Reg 1 is 0x%x ! \n", sts);
+        UARTIF_uartPrintf(0, ".");
+
+        delay1ms(50);
     }
-    
-    return W25Q32_OK;
+    while(sts & 0x01);
+    UARTIF_uartPrintf(0, "\n");
+    // W25Q32_WaitForReady();         // 等待擦除完成
+}
+
+void W25Q32_Erase32k(uint32_t addr) 
+{    
+       uint8_t sts = 0;
+
+    W25Q32_WriteEnable();          // 使能写操作
+    W25Q32_CS(0);
+
+    Spi_SendData(W25Q32_CMD_32K_BLOCK_ERASE);
+    Spi_SendData((uint8_t)((addr >> 16) & 0xFF));
+    Spi_SendData((uint8_t)((addr >> 8) & 0xFF));
+    Spi_SendData((uint8_t)(addr & 0xFF));
+    UARTIF_uartPrintf(0, "Waiting for erase 32k .");
+
+    W25Q32_CS(1);
+    do 
+    {
+        sts = W25Q32_ReadStatusReg();
+        // UARTIF_uartPrintf(0, "Status Reg 1 is 0x%x ! \n", sts);
+        UARTIF_uartPrintf(0, ".");
+
+        delay1ms(100);
+    }
+    while(sts & 0x01);
+    UARTIF_uartPrintf(0, "\n");
+
+    // W25Q32_WaitForReady();         // 等待擦除完成
+}
+
+void W25Q32_Erase64k(uint32_t addr) 
+{    
+       uint8_t sts = 0;
+
+    W25Q32_WriteEnable();          // 使能写操作
+    W25Q32_CS(0);
+
+    Spi_SendData(W25Q32_CMD_64K_BLOCK_ERASE);
+    Spi_SendData((uint8_t)((addr >> 16) & 0xFF));
+    Spi_SendData((uint8_t)((addr >> 8) & 0xFF));
+    Spi_SendData((uint8_t)(addr & 0xFF));
+    UARTIF_uartPrintf(0, "Waiting for erase 64k .");
+
+    W25Q32_CS(1);
+    do 
+    {
+        sts = W25Q32_ReadStatusReg();
+        // UARTIF_uartPrintf(0, "Status Reg 1 is 0x%x ! \n", sts);
+        UARTIF_uartPrintf(0, ".");
+        delay1ms(200);
+    }
+    while(sts & 0x01);
+    UARTIF_uartPrintf(0, "\n");
+
+    // W25Q32_WaitForReady();         // 等待擦除完成
 }
 
 /* 整片擦除 */
-uint8_t W25Q32_EraseChip(void) 
+void W25Q32_EraseChip(void) 
 {
-    // 使能写操作
-    if (W25Q32_WriteEnable() != W25Q32_OK) {
-        return W25Q32_ERROR;
-    }
-    
+    uint8_t sts = 0;
+    W25Q32_WriteEnable();
     W25Q32_CS(0);
     Spi_SendData(W25Q32_CMD_CHIP_ERASE);
+    UARTIF_uartPrintf(0, "Waiting for erase chip .");
+
     W25Q32_CS(1);
-    
-    // 等待擦除完成（时间较长）
-    if (W25Q32_WaitForReady() != W25Q32_OK) {
-        return W25Q32_ERROR;
+    do 
+    {
+        sts = W25Q32_ReadStatusReg();
+        // UARTIF_uartPrintf(0, "Status Reg 1 is 0x%x ! \n", sts);
+        UARTIF_uartPrintf(0, ".");
+        delay1ms(200);
     }
-    
-    return W25Q32_OK;
+    while(sts & 0x01);
+    UARTIF_uartPrintf(0, "\n");
+
+    // W25Q32_WaitForReady();         // 等待时间较长（秒级）
 }
 
 /* 读取数据 (支持跨页连续读) */
 uint8_t W25Q32_ReadData(uint32_t addr, uint8_t *buf, uint32_t len) 
 {
-    uint32_t i;    
-    
-    // 参数检查
-    if (buf == NULL || len == 0) {
-        return W25Q32_ERROR;
-    }
-    
-    // 地址范围检查
-    if (addr >= W25Q32_TOTAL_SIZE || (addr + len) > W25Q32_TOTAL_SIZE) {
+    uint32_t i = 0;    
+    if (buf == NULL || len == 0 || addr >= FLASH_TOTAL_SIZE)
+    {
         return W25Q32_ERROR;
     }
 
     W25Q32_CS(0);
+
     Spi_SendData(W25Q32_CMD_READ_DATA);
     Spi_SendData((uint8_t)((addr >> 16) & 0xFF));
     Spi_SendData((uint8_t)((addr >> 8) & 0xFF));
     Spi_SendData((uint8_t)(addr & 0xFF));
 
-    for (i = 0; i < len; i++) {
+
+    for (;i < len;i++)
+    {
         *(buf + i) = Spi_ReceiveData();
     }
     W25Q32_CS(1);
-    
+
     return W25Q32_OK;
 }
 
 /* 写入数据 (页编程，单次最大256字节) */
 uint8_t W25Q32_WritePage(uint32_t addr, uint8_t *buf, uint16_t len) 
 {
-    uint32_t i;
-    
-    // 参数检查
-    if (buf == NULL || len == 0) {
+    uint32_t i = 0;
+
+    if (buf == NULL || len == 0 || addr >= FLASH_TOTAL_SIZE)
+    {
         return W25Q32_ERROR;
     }
-    
-    // 地址范围检查
-    if (addr >= W25Q32_TOTAL_SIZE) {
-        return W25Q32_ERROR;
-    }
-    
-    // 长度不能超过页边界
-    if (len > W25Q32_PAGE_SIZE) {
-        return W25Q32_ERROR;
-    }
-    
-    // 检查是否跨页
-    if ((addr & 0xFF) + len > W25Q32_PAGE_SIZE) {
-        return W25Q32_ERROR;
+        // 长度不能超过页边界
+    if (len > W25Q32_PAGE_SIZE)
+    {
+     len = W25Q32_PAGE_SIZE;
     }
 
-    // 使能写操作
-    if (W25Q32_WriteEnable() != W25Q32_OK) {
-        return W25Q32_ERROR;
-    }
-    
+    W25Q32_WriteEnable();          // 必须使能写操作
     W25Q32_CS(0);
     Spi_SendData(W25Q32_CMD_PAGE_PROGRAM);
     Spi_SendData((uint8_t)((addr >> 16) & 0xFF));
     Spi_SendData((uint8_t)((addr >> 8) & 0xFF));
     Spi_SendData((uint8_t)(addr & 0xFF));
-    
-    for (i = 0; i < len; i++) {
+    for (;i < len;i++)
+    {
         Spi_SendData(*(buf + i));
     }
-    
     W25Q32_CS(1);
-    
-    // 等待写入完成
-    if (W25Q32_WaitForReady() != W25Q32_OK) {
-        return W25Q32_ERROR;
-    }
+    W25Q32_WaitForReady();         // 等待写入完成
 
     W25Q32_WriteDisable();
     return W25Q32_OK;
 }
 
+uint8_t W25Q32_memset(void *s, int c, size_t n)
+{
+    uint8_t *p = (uint8_t *)s;
+    if (s == NULL || n == 0) {
+        return W25Q32_ERROR;
+    }
+    while (n--) {
+        *p++ = (uint8_t)c;
+    }
+    return W25Q32_OK;
+}
 /******************************************************************************
  * EOF (not truncated)
  ******************************************************************************/

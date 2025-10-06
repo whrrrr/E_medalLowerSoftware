@@ -26,10 +26,13 @@
 #include "spi.h"
 #include "epd.h"
 #include "uart_interface.h"
+#include "w25q32.h"
+#include "flash_manager.h"
 
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                            
  ******************************************************************************/
+#define BUFFER_SIZE 256u
 #define DC_H    Gpio_SetIO(0, 1, 1) //DC输出高
 #define DC_L    Gpio_SetIO(0, 1, 0) //DC输出低
 #define RST_H   Gpio_SetIO(0, 3, 1) //RST输出高
@@ -50,6 +53,7 @@
 /******************************************************************************
  * Local variable definitions ('static')                                      *
  ******************************************************************************/
+static uint8_t G_buffer3[BUFFER_SIZE] = {0};
 
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                             
@@ -106,6 +110,21 @@ static void spiInit(void)
 
 }
 
+static void writeBuffer(uint8_t *buf, uint16_t size)
+{
+    uint16_t i;
+    Spi_SetCS(TRUE);
+    Spi_SetCS(FALSE);
+
+    for (i = 0; i < size; i++)
+    {
+        Spi_SendData(*(buf + i));
+    }
+    Spi_SetCS(TRUE);
+
+}
+
+
 void EPD_UpdateGDEY042Z98ALL(void)
 {   
   spiWriteCmd(0x22); //Display Update Control
@@ -122,66 +141,72 @@ void EPD_UpdateGDEY042Z98ALL_fast(void)
   spiWriteCmd(0x20); //Activate Display Update Sequence
 }
 
-void EPD_WhiteScreenGDEY042Z98ALLBlack(void)
+
+void EPD_WhiteScreenGDEY042Z98UsingFlashDate(imageType_t type, uint8_t slotId)
 {
     unsigned int i;
-	    unsigned int j;
-
-	  //Write Data
-		spiWriteCmd(0x24);	       //Transfer old data
-	//   for(i=0;i<EPD_ARRAY;i++)	  
-    // {	
-	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
-    // }	
+//    unsigned int j;
+    flash_result_t result;
+	spiWriteCmd(0x24);	       //Transfer BW data
     DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 150; i++)
+    for (i = 0; i <= MAX_FRAME_NUM; i++)
     {
-        for (j = 0; j < 25; j++)
+        memset(G_buffer3, 0xff, BUFFER_SIZE);
+        if (type == IMAGE_BW || type == IMAGE_BW_AND_RED)
         {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xF0);
+            result = FM_readImage(MAGIC_BW_IMAGE_DATA, slotId, i, G_buffer3);
+            if (result != FLASH_OK)
+            {
+                UARTIF_uartPrintf(0, "Flash write image data id 0x%02x page 0x%02x fail! error code is %d \n", slotId, i, result);
+                memset(G_buffer3, 0xff, BUFFER_SIZE);
+            }
         }
-        for (; j < 50; j++)
+        delay1ms(1);
+        if (i == MAX_FRAME_NUM)
         {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xFF);
+           writeBuffer(G_buffer3, 120u);
         }
+        else 
+        {
+            writeBuffer(G_buffer3, PAYLOAD_SIZE);
+            // UARTIF_uartPrintf(0, " EPD: page %d data0 is 0x%02x \n", i, G_buffer3[0]);
+
+        }
+        // delay1ms(1);
+        // UARTIF_uartPrintf(0, " %d cycle \n", i);
     }
 
-    for (; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xFF);
-        }
-    }
-
-    Spi_SetCS(TRUE);
     DC_L;
 
     delay1ms(2);
 
-		spiWriteCmd(0x26);		     //Transfer new data
-	//   for(i=0;i<EPD_ARRAY;i++)	     
-	//   {
-	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
-	//   }
-        DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 300; i++)
+	spiWriteCmd(0x26);		     //Transfer new data
+    DC_H;
+    for (i = 0; i <= MAX_FRAME_NUM; i++)
     {
-        for (j = 0; j < 50; j++)
+        memset(G_buffer3, 0, BUFFER_SIZE);
+        if (type == IMAGE_RED || type == IMAGE_BW_AND_RED)
         {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0x00);
-        }
-    }
+            result = FM_readImage(MAGIC_RED_IMAGE_DATA, slotId, i, G_buffer3);
 
-    Spi_SetCS(TRUE);
+            if (result != FLASH_OK)
+            {
+                UARTIF_uartPrintf(0, "Flash write image data id 0x%02x page 0x%02x fail! error code is %d \n", slotId, i, result);
+                memset(G_buffer3, 0, BUFFER_SIZE);
+            }
+        }
+        delay1ms(1);
+        if (i == MAX_FRAME_NUM)
+        {
+           writeBuffer(G_buffer3, 120u);
+        }
+        else 
+        {
+            writeBuffer(G_buffer3, PAYLOAD_SIZE);
+        }
+        // delay1ms(1);
+        // UARTIF_uartPrintf(0, " %d cycle \n", i);
+    }
     DC_L;
     delay1ms(2);
 
@@ -189,134 +214,272 @@ void EPD_WhiteScreenGDEY042Z98ALLBlack(void)
 
 }
 
-void EPD_WhiteScreenGDEY042Z98ALLWrite(void)
-{
-    unsigned int i;
-	    unsigned int j;
+// void EPD_WhiteScreenGDEY042Z98ALLBlack(void)
+// {
+//     unsigned int i;
+// 	    unsigned int j;
 
-	  //Write Data
-		spiWriteCmd(0x24);	       //Transfer old data
-	//   for(i=0;i<EPD_ARRAY;i++)	  
-    // {	
-	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
-    // }	
-    DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xff);
-        }
-    }
+// 	  //Write Data
+// 		spiWriteCmd(0x24);	       //Transfer old data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	  
+//     // {	
+// 	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
+//     // }	
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 150; i++)
+//     {
+//         for (j = 0; j < 25; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xF0);
+//         }
+//         for (; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xFF);
+//         }
+//     }
 
-    Spi_SetCS(TRUE);
-    DC_L;
+//     for (; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xFF);
+//         }
+//     }
 
-    delay1ms(2);
+//     Spi_SetCS(TRUE);
+//     DC_L;
 
-		spiWriteCmd(0x26);		     //Transfer new data
-	//   for(i=0;i<EPD_ARRAY;i++)	     
-	//   {
-	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
-	//   }
-        DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0x00);
-        }
-    }
+//     delay1ms(2);
 
-    Spi_SetCS(TRUE);
-    DC_L;
-    delay1ms(2);
+// 		spiWriteCmd(0x26);		     //Transfer new data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	     
+// 	//   {
+// 	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
+// 	//   }
+//         DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
 
-    EPD_UpdateGDEY042Z98ALL_fast();	    
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
 
-}
+//     EPD_UpdateGDEY042Z98ALL_fast();	    
 
-void EPD_WhiteScreenGDEY042Z98ALLRed(void)
-{
-    unsigned int i;
-	    unsigned int j;
+// }
 
-	  //Write Data
-		spiWriteCmd(0x24);	       //Transfer old data
-	//   for(i=0;i<EPD_ARRAY;i++)	  
-    // {	
-	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
-    // }	
-    DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
+// void EPD_WhiteScreenGDEY042Z98ALLWrite(void)
+// {
+//     unsigned int i;
+// 	    unsigned int j;
 
-    for (j = 0; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xFF);
-        }
-    }
+// 	  //Write Data
+// 		spiWriteCmd(0x24);	       //Transfer old data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	  
+//     // {	
+// 	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
+//     // }	
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xff);
+//         }
+//     }
 
-    Spi_SetCS(TRUE);
-    DC_L;
+//     Spi_SetCS(TRUE);
+//     DC_L;
 
-    delay1ms(2);
+//     delay1ms(2);
 
-		spiWriteCmd(0x26);		     //Transfer new data
-	//   for(i=0;i<EPD_ARRAY;i++)	     
-	//   {
-	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
-	//   }
-        DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 150; i++)
-    {
-        for (j = 0; j < 25; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xF0);
-        }
-        for (; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0x00);
-        }
-    }
+// 		spiWriteCmd(0x26);		     //Transfer new data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	     
+// 	//   {
+// 	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
+// 	//   }
+//         DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
 
-    for (; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0x00);
-        }
-    }
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
 
-    Spi_SetCS(TRUE);
-    DC_L;
-    delay1ms(2);
+//     EPD_UpdateGDEY042Z98ALL_fast();	    
 
-    EPD_UpdateGDEY042Z98ALL_fast();	    
+// }
 
-}
+// void EPD_WhiteScreenGDEY042Z98ALLRed(void)
+// {
+//     unsigned int i;
+// 	    unsigned int j;
+
+// 	  //Write Data
+// 		spiWriteCmd(0x24);	       //Transfer old data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	  
+//     // {	
+// 	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
+//     // }	
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+
+//     for (j = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xFF);
+//         }
+//     }
+
+//     Spi_SetCS(TRUE);
+//     DC_L;
+
+//     delay1ms(2);
+
+// 		spiWriteCmd(0x26);		     //Transfer new data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	     
+// 	//   {
+// 	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
+// 	//   }
+//         DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 150; i++)
+//     {
+//         for (j = 0; j < 25; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xF0);
+//         }
+//         for (; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
+
+//     for (; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
+
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
+
+//     EPD_UpdateGDEY042Z98ALL_fast();	    
+
+// }
 
 
-void EPD_poweroff(void)
-{
-    spiWriteCmd(0x02);
-    spiWriteCmd(0x07);
-    spiWriteData(0xA5); 
-}
+// void EPD_poweroff(void)
+// {
+//     spiWriteCmd(0x02);
+//     spiWriteCmd(0x07);
+//     spiWriteData(0xA5); 
+// }
+
+// void EPD_display(unsigned char data[][BYTES_PER_ROW])
+// {
+//     int i = 0,j = 0;
+//     spiWriteCmd(0x13);
+//     delay1ms(2);
+
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 152; i++)
+//     {
+//         for (j = 0; j < 19; j++)
+//         {
+//             Spi_SendData(data[i][j]);
+//         }
+//     }
+
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
+
+//     spiWriteCmd(0x12);
+// }
+
+// void EPD_displaywft0420cz15(void)
+// {
+//     int i = 0,j = 0;
+//     spiWriteCmd(0x10);
+//     delay1ms(2);
+
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xFF);
+//         }
+//     }
+
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
+
+//     spiWriteCmd(0x13);
+//     delay1ms(2);
+
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
+
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
+
+//     spiWriteCmd(0x12);
+//     // spiWriteData(0xF7);
+//     // spiWriteCmd(0x20);
+// }
+
 
 void EPD_initGDEY042Z98(void)
 {
@@ -391,71 +554,71 @@ void EPD_initGDEY042Z98(void)
 
 }
 
-void EPD_WhiteScreenGDEY042Z98ALL(unsigned char data[][BYTES_PER_ROW])
-{
-    unsigned int i;
-	    unsigned int j;
+// void EPD_WhiteScreenGDEY042Z98ALL(unsigned char data[][BYTES_PER_ROW])
+// {
+//     unsigned int i;
+// 	    unsigned int j;
 
-	  //Write Data
-		spiWriteCmd(0x24);	       //Transfer old data
-	//   for(i=0;i<EPD_ARRAY;i++)	  
-    // {	
-	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
-    // }	
-    DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0xFF);
-        }
-    }
+// 	  //Write Data
+// 		spiWriteCmd(0x24);	       //Transfer old data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	  
+//     // {	
+// 	//     spiWriteData(datasBW[i]);  //Transfer the actual displayed data
+//     // }	
+//     DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0xFF);
+//         }
+//     }
 
-    Spi_SetCS(TRUE);
-    DC_L;
+//     Spi_SetCS(TRUE);
+//     DC_L;
 
-    delay1ms(2);
+//     delay1ms(2);
 
-		spiWriteCmd(0x26);		     //Transfer new data
-	//   for(i=0;i<EPD_ARRAY;i++)	     
-	//   {
-	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
-	//   }
-        DC_H;
-    Spi_SetCS(TRUE);
-    Spi_SetCS(FALSE);
-    for (i = 0; i < 150; i++)
-    {
-        for (j = 0; j < 20; j++)
-        {
-            Spi_SendData(data[i][j]);
-            // Spi_SendData(0x0F);
-        }
-        for (; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0x00);
-        }
-    }
-    for (; i < 300; i++)
-    {
-        for (j = 0; j < 50; j++)
-        {
-            // Spi_SendData(data[i][j]);
-            Spi_SendData(0x00);
-        }
-    }
+// 		spiWriteCmd(0x26);		     //Transfer new data
+// 	//   for(i=0;i<EPD_ARRAY;i++)	     
+// 	//   {
+// 	//     spiWriteData(~datasRW[i]);  //Transfer the actual displayed data
+// 	//   }
+//         DC_H;
+//     Spi_SetCS(TRUE);
+//     Spi_SetCS(FALSE);
+//     for (i = 0; i < 150; i++)
+//     {
+//         for (j = 0; j < 20; j++)
+//         {
+//             Spi_SendData(data[i][j]);
+//             // Spi_SendData(0x0F);
+//         }
+//         for (; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
+//     for (; i < 300; i++)
+//     {
+//         for (j = 0; j < 50; j++)
+//         {
+//             // Spi_SendData(data[i][j]);
+//             Spi_SendData(0x00);
+//         }
+//     }
 
-    Spi_SetCS(TRUE);
-    DC_L;
-    delay1ms(2);
+//     Spi_SetCS(TRUE);
+//     DC_L;
+//     delay1ms(2);
 
-    EPD_UpdateGDEY042Z98ALL_fast();	    
+//     EPD_UpdateGDEY042Z98ALL_fast();	    
 
-}
+// }
 
 /******************************************************************************
  * EOF (not truncated)

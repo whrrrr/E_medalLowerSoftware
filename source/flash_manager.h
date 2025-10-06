@@ -15,42 +15,60 @@ typedef enum {
     FLASH_ERROR_READ_FAIL,      // 读取失败
     FLASH_ERROR_ERASE_FAIL,     // 擦除失败
     FLASH_ERROR_GC_FAIL,        // 垃圾回收失败
-    FLASH_ERROR_INIT_FAIL       // 初始化失败
+    FLASH_ERROR_INIT_FAIL,      // 初始化失败
+    FLASH_ERROR_IMAGE_FRAME_LOST // 图像帧丢失
 } flash_result_t;
 
+// typedef enum {
+//     FLASH_SCAN_JOB_NONE = 0,
+//     FLASH_SCAN_JOB_INIT,
+//     FLASH_SCAN_JOB_SCAN_IMAGE_DATA_BW,
+//     FLASH_SCAN_JOB_SCAN_IMAGE_DATA_RED
+// } flashScanJob_t;
 // Segment头结构（14字节）
 typedef struct {
-    uint8_t header_magic;       // Segment头魔法数字 区分数据page
-    uint8_t segment_id;         // Segment ID (0或1)
-    uint32_t status_magic;      // 状态魔法数字
-    uint32_t gc_count;          // 垃圾回收次数
+    uint8_t headerMagic;       // Segment头魔法数字 区分数据page
+    uint8_t segmentId;         // Segment ID (0或1)
+    uint32_t statusMagic;      // 状态魔法数字
+    uint32_t gcCounter;          // 垃圾回收次数
     uint32_t crc32;            // 头部CRC32校验
 } segment_header_t;
 
+// typedef struct {
+//     // uint8_t frame_num;       // 帧编号
+//     uint8_t blockAddress;     // 对应的block地址
+//     uint8_t pageAddress;      // 对应的page地址
+// } image_address_t;
 // 数据Page结构（256字节）
-typedef struct {
-    uint8_t  magic;            // 魔法数字（区分数据页类型）
-    uint16_t data_id;          // 数据块ID
-    uint8_t  data_size;        // 数据大小（1-247字节）
-    uint32_t crc32;           // 数据CRC32校验
-    uint8_t  data[247];       // 实际数据
-} data_page_t;
+// typedef struct {
+//     uint8_t  magic;            // 魔法数字（区分数据页类型）
+//     uint16_t dataId;          // 数据块ID
+//     uint8_t  data_size;        // 数据大小（1-247字节）
+//     uint32_t crc32;           // 数据CRC32校验
+//     uint8_t  data[247];       // 实际数据
+// } data_page_t;
 
 // 数据条目映射
-typedef struct {
-    uint16_t data_id;          // 数据ID
-    uint32_t page_address;     // 对应的page地址
-} data_entry_t;
+// typedef struct {
+//     // uint8_t dataId;          // 数据ID
+//     uint8_t blockAddress;     // 对应的block地址
+//     uint8_t pageAddress;      // 对应的page地址
+// } address_t;
 
 // Flash管理器上下文
 typedef struct {
-    uint32_t active_segment_base;      // 激活segment基地址
-    uint32_t backup_segment_base;      // 备用segment基地址
-    uint32_t next_write_address;       // 下次写入地址
-    uint16_t data_count;               // 当前数据条目数
-    uint8_t  gc_in_progress;           // 垃圾回收进行标志
-    uint8_t  reserved;                 // 保留字段
-    data_entry_t data_entries[MAX_DATA_ENTRIES]; // 数据映射表
+    uint8_t activeSegmentBaseStatus;   // 0x00为初始化状态或作为状态；0xAC 表示active_segment_base 为为0x000000，backup_segment_base 为0x200000；0xBD表示相反
+    uint8_t  gcInProgress;           // 垃圾回收进行标志
+    uint16_t nextWriteAddress;       // 下次写入地址
+    // uint16_t data_count;               // 当前数据条目数
+    uint32_t currentGcCounter;
+    uint16_t dataEntries[MAX_DATA_ENTRIES]; // 数据映射表
+    uint16_t imageBwEntries[MAX_IMAGE_ENTRIES]; // 数据映射表
+    uint16_t imageRedEntries[MAX_IMAGE_ENTRIES]; // 数据映射表
+    segment_header_t header0;
+    segment_header_t header1;
+    uint16_t* entries[3u]; // 0 - dataEntries, 1 - imageBwEntries, 2 - imageRedEntries
+    uint8_t entriesCountMax[3u]; // 0 - MAX_DATA_ENTRIES, 1 - MAX_IMAGE_ENTRIES, 2 - MAX_IMAGE_ENTRIES
 } flash_manager_t;
 
 // 函数声明
@@ -60,42 +78,39 @@ typedef struct {
  * @param manager Flash管理器指针
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_manager_init(flash_manager_t* manager);
+flash_result_t FM_init(void);
 
 /**
  * @brief 写入数据
- * @param manager Flash管理器指针
- * @param data_id 数据ID
+ * @param dataId 数据ID
  * @param data 数据指针
  * @param size 数据大小（1-247字节）
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_write_data(flash_manager_t* manager, uint16_t data_id, const uint8_t* data, uint16_t size);
+flash_result_t FM_writeData(uint8_t magic, uint16_t dataId, const uint8_t* data, uint16_t size);
 
 /**
  * @brief 读取数据
- * @param manager Flash管理器指针
- * @param data_id 数据ID
+ * @param dataId 数据ID
  * @param data 数据缓冲区指针
  * @param size 输入：缓冲区大小，输出：实际数据大小
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_read_data(flash_manager_t* manager, uint16_t data_id, uint8_t* data, uint16_t* size);
+flash_result_t FM_readData(uint8_t magic, uint16_t dataId, uint8_t* data, uint8_t size);
 
 /**
  * @brief 删除数据
- * @param manager Flash管理器指针
- * @param data_id 数据ID
+ * @param dataId 数据ID
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_delete_data(flash_manager_t* manager, uint16_t data_id);
+flash_result_t FM_deleteData(uint16_t dataId);
 
 /**
  * @brief 执行垃圾回收
  * @param manager Flash管理器指针
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_garbage_collect(flash_manager_t* manager);
+// flash_result_t flash_garbage_collect(flash_manager_t* manager);
 
 /**
  * @brief 获取Flash状态信息
@@ -105,35 +120,30 @@ flash_result_t flash_garbage_collect(flash_manager_t* manager);
  * @param data_count 输出：数据条目数量
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_get_status(flash_manager_t* manager, uint32_t* used_pages, uint32_t* free_pages, uint32_t* data_count);
+// flash_result_t flash_get_status(flash_manager_t* manager, uint32_t* used_pages, uint32_t* free_pages, uint32_t* data_count);
 
 /**
  * @brief 强制执行垃圾回收（用于测试）
- * @param manager Flash管理器指针
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_force_garbage_collect(flash_manager_t* manager);
+flash_result_t FM_forceGarbageCollect(void);
 
 /**
- * @brief 写入图像数据页
- * @param manager Flash管理器指针
+ * @brief 写入图像头页
  * @param magic 魔法数字（区分数据页类型）
- * @param data_id 数据ID
- * @param data 数据指针
- * @param size 数据大小（1-247字节）
+ * @param slotId 数据ID
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_write_image_data_page(flash_manager_t* manager, uint8_t magic, uint16_t data_id, const uint8_t* data, uint8_t size);
+flash_result_t FM_writeImageHeader(uint8_t magic, uint8_t slotId);
 
 /**
  * @brief 读取图像数据页
- * @param manager Flash管理器指针
- * @param data_id 数据ID
  * @param magic 期望的魔法数字
+ * @param slotId 数据ID
+ * @param frameNum 输入：帧编号
  * @param data 数据缓冲区指针
- * @param size 输入：缓冲区大小，输出：实际数据大小
  * @return flash_result_t 操作结果
  */
-flash_result_t flash_read_image_data_page(flash_manager_t* manager, uint16_t data_id, uint8_t expected_magic, uint8_t* data, uint8_t* size);
+flash_result_t FM_readImage(uint8_t magic, uint8_t slotId, uint8_t frameNum, uint8_t* data);
 
 #endif // FLASH_MANAGER_H

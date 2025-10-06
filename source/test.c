@@ -1,6 +1,7 @@
 void DRAW_CharZ(int x, int y, char c, int width, int height, const unsigned char *fontData, int fontSize, int color)
 {
-    int index;
+    int index = c - '0';  // 获取字符的索引
+
     unsigned char lineByte;
     int row, bit;
     // int screenRow, screenCol;
@@ -10,8 +11,6 @@ void DRAW_CharZ(int x, int y, char c, int width, int height, const unsigned char
     int rotatedRow;
     int rotatedCol;
     int fy,fx;
-    
-    index = c - '0';  // 获取字符的索引
     if (index < 0 || index > 9) return;  // 目前只支持数字字符0-9，如果需要其他字符，需要更新索引处理
 
     // 遍历字符的每一行，每行包含 width / 8 字节
@@ -60,11 +59,8 @@ void DRAW_CharZ(int x, int y, char c, int width, int height, const unsigned char
 
 void DRAW_StringZ(int x, int y, const char *str, int width, int height, const unsigned char *fontData, int fontSize, int color)
 {
-    int cursorX;
-    int cursorY;
-    
-    cursorX = x;  // 当前字符的 X 坐标
-    cursorY = y;  // 当前字符的 Y 坐标
+    int cursorX = x;  // 当前字符的 X 坐标
+    int cursorY = y;  // 当前字符的 Y 坐标
 
     // 遍历字符串中的每个字符
     while (*str) {

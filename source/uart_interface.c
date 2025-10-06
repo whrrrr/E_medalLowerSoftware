@@ -37,6 +37,7 @@
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                            
  ******************************************************************************/
+#define DEBUGLEVEL        1
 
 /******************************************************************************
  * Global variable definitions (declared in header file with 'extern')
@@ -53,7 +54,7 @@
 /******************************************************************************
  * Local variable definitions ('static')                                      *
  ******************************************************************************/
-Queue uartRecdata, lpUartRecdata;
+static Queue uartRecdata, lpUartRecdata;
 static uint8_t cmd = 0xff;
 
 /******************************************************************************
@@ -92,14 +93,12 @@ void LPUART_rxIntCallback(void)
     }
 }
 
-#include "global_buffers.h"
-
 void UARTIF_uartPrintf(uint8_t uartNumber, const char *format, ...)
 {
-    char* buffer = (char*)g_general_buffer_256; // 使用全局缓冲区，避免栈溢出
+    char buffer[256]; // 缓冲区，用于存储格式化后的字符串
     va_list args;     // 可变参数列表
-    uint8_t len;
-    uint8_t i;
+    uint8_t len = 0;
+    uint8_t i = 0;
 
     // 初始化可变参数
     va_start(args, format);
@@ -141,19 +140,16 @@ void UARTIF_uartPrintf(uint8_t uartNumber, const char *format, ...)
 
 void UARTIF_uartPrintfFloat(uint8_t uartNumber, const char *head, const float data)
 {
-   uint8_t integerPart;
-   float decimalPart;
-   
-   integerPart = (uint8_t)data;
-   decimalPart = data * 10000 - integerPart * 10000;
+   uint8_t integerPart = (uint8_t)data;
+   float decimalPart = data * 10000 - integerPart * 10000;
    UARTIF_uartPrintf(uartNumber, "%s%d.%d !!\n",head,integerPart,(uint16_t)decimalPart);
 }
 
 
 void UARTIF_uartInit(void)
 {
-    uint16_t timer;
-    uint32_t pclk;
+    uint16_t timer=0;
+    uint32_t pclk=0;
 
     stc_uart_config_t  stcConfig;
     stc_uart_irq_cb_t stcUartIrqCb;
@@ -281,7 +277,7 @@ void UARTIF_lpuartInit(void)
 
 void UARTIF_passThrough(void)
 {
-	   uint8_t data;
+	   uint8_t data = 0;
     if (!Queue_IsEmpty(&uartRecdata))
     {
         Queue_Dequeue(&uartRecdata, &data);
@@ -318,17 +314,9 @@ void UARTIF_passThrough(void)
     }
 }
 
-void UARTIF_SendBleData(uint8_t data)
-{
-    (void)LPUart_SendData(data);
-}
-
-
 uint8_t UARTIF_passThroughCmd(void)
 {
-    uint8_t tcmd;
-    
-    tcmd = cmd;
+    uint8_t tcmd = cmd;
     cmd = 0xff;
     return tcmd;
 }

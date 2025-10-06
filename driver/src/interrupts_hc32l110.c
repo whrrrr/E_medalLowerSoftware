@@ -259,7 +259,7 @@ void TIM2_IRQHandler(void)
 void LPTIM_IRQHandler(void)
 {
     // LpTim_IRQHandler(0);
-    LptInt();
+    // LptInt();
 }
 
 /**

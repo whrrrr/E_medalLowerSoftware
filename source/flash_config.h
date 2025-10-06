@@ -6,9 +6,10 @@
 // Flash芯片基本参数
 #define FLASH_BASE_ADDRESS      0x000000    // Flash起始地址
 #define FLASH_TOTAL_SIZE        0x400000    // 4MB总容量
-#define FLASH_PAGE_SIZE         256         // 页大小
-#define FLASH_SECTOR_SIZE       4096        // 扇区大小
-#define FLASH_BLOCK_SIZE        65536       // 块大小
+#define FLASH_PAGE_SIZE         256u         // 页大小
+#define FLASH_SECTOR_SIZE       4096u        // 扇区大小
+#define FLASH_BLOCK_SIZE        65536u       // 块大小
+#define PAYLOAD_SIZE            248u         // 有效载荷大小
 
 // Segment配置
 #define FLASH_SEGMENT_COUNT     2           // 两个segment
@@ -16,29 +17,40 @@
 #define FLASH_SEGMENT0_BASE     FLASH_BASE_ADDRESS      // Segment 0基地址
 #define FLASH_SEGMENT1_BASE     (FLASH_BASE_ADDRESS + FLASH_SEGMENT_SIZE)  // Segment 1基地址
 
+// GC 标志页地址
+// #define FLASH_SEGMENT0_GCFLAGPAGEADDR      0x1FFF00    // Flash起始地址
+// #define FLASH_SEGMENT1_GCFLAGPAGEADDR      0x3FFF00    // Flash起始地址
+
 // 每个segment的page配置
 #define FLASH_PAGES_PER_SEGMENT (FLASH_SEGMENT_SIZE / FLASH_PAGE_SIZE)  // 每个segment的page数量：8192
 #define FLASH_DATA_PAGES_PER_SEGMENT (FLASH_PAGES_PER_SEGMENT - 1)     // 数据page数量：8191（除去header page）
 
 // 数据管理配置
-#define MAX_DATA_ENTRIES        8         // 最大数据条目数
+#define MAX_DATA_ENTRIES        16         // 最大数据条目数
+#define MAX_IMAGE_ENTRIES       8         //  最大图像条目数
+#define MAX_FRAME_NUM           60         // 最大帧数总共61 帧，0-60
+
 #define INVALID_DATA_ID         0xFFFF    // 无效数据ID (16位)
 #define INVALID_ADDRESS         0xFFFFFFFF  // 无效地址
 
 // Segment头魔法数字定义
 #define SEGMENT_HEADER_MAGIC    0xAB        // Segment头标识魔法数字
-#define DATA_PAGE_MAGIC         0xA5        // 普通数据页标识魔法数字
+#define DATA_PAGE_MAGIC         0xA0        // 普通数据页标识魔法数字
 
 // 图像数据页魔法数字定义（与image_protocol.h保持一致）
-#define MAGIC_BW_IMAGE_DATA     0xB1        // 黑白图像数据页
-#define MAGIC_RED_IMAGE_DATA    0xB2        // 红白图像数据页
-#define MAGIC_IMAGE_HEADER      0xB0        // 图像头页
+#define MAGIC_BW_IMAGE_HEADER   0xA1        // 图像头页
+#define MAGIC_RED_IMAGE_HEADER  0xA2        // 图像头页
+#define MAGIC_BW_IMAGE_DATA     0xA3        // 黑白图像数据页
+#define MAGIC_RED_IMAGE_DATA    0xA4        // 红白图像数据页
 
 // 状态魔法数字定义
 #define SEGMENT_MAGIC_ACTIVE    0x12345678  // 激活状态
 #define SEGMENT_MAGIC_BACKUP    0x87654321  // 备用状态
-#define SEGMENT_MAGIC_GC        0xAAAABBBB  // 垃圾回收进行中
-#define SEGMENT_MAGIC_ERASED    0xFFFFFFFF  // 未初始化/已擦除
+// #define SEGMENT_MAGIC_GC        0xAAAABBBB  // 垃圾回收进行中
+// #define SEGMENT_MAGIC_ERASED    0xFFFFFFFF  // 未初始化/已擦除
+
+#define MAGIC_LOW_ACTIVE        0xAC
+#define MAGIC_HIGH_ACTIVE       0xBD
 
 // CRC32多项式
 #define CRC32_POLYNOMIAL        0xEDB88320

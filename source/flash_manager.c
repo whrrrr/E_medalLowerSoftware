@@ -1,696 +1,1206 @@
+/******************************************************************************
+ * Include files
+ ******************************************************************************/
+
 #include "flash_manager.h"
 #include "w25q32.h"
 #include "crc_utils.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
+#include "uart_interface.h"
+#include "crc_utils.h"
+#include "ddl.h"
 
-// 内部函数声明
-static flash_result_t read_segment_header(uint32_t segment_base, segment_header_t* header);
-static flash_result_t write_segment_header(uint32_t segment_base, const segment_header_t* header);
-static flash_result_t scan_segment_pages(flash_manager_t* manager, uint32_t segment_base);
-static int16_t find_data_entry(flash_manager_t* manager, uint16_t data_id);
-static flash_result_t add_data_entry(flash_manager_t* manager, uint16_t data_id, uint32_t page_address);
-static flash_result_t remove_data_entry(flash_manager_t* manager, uint16_t data_id);
-static flash_result_t erase_segment(uint32_t segment_base);
-static flash_result_t copy_valid_pages(flash_manager_t* manager);
- 
+
+/******************************************************************************
+ * Local function prototypes ('static')
+ ******************************************************************************/
+
+static flash_result_t readSegmentHeader(uint32_t segmentBase, boolean_t isDstHeaderHigh);
+static flash_result_t resetSegment(boolean_t isSetHiSegment, const uint32_t statusMagic, const uint32_t currentGcCounter);
+static flash_result_t scanSegmentPages(void);
+//static int16_t find_data_entry(flash_manager_t* manager, uint16_t dataId);
+//static flash_result_t add_data_entry(flash_manager_t* manager, uint16_t dataId, uint32_t page_address);
+
+static flash_result_t eraseSegment(boolean_t eraseHiSegment);
+static flash_result_t copyValidPages(void);
+static void readBlock(uint8_t blockAddress);
+static flash_result_t garbageCollect(void);
+
 /******************************************************************************
  * Local variable definitions ('static')                                      *
  ******************************************************************************/
+static flash_manager_t fmCtx;
 
 // 静态缓冲区，用于Flash读写操作的中间变量
-uint8_t g_flash_buffer[FLASH_PAGE_SIZE];
+static uint8_t G_buffer1[FLASH_PAGE_SIZE] = {0};
+static uint8_t G_buffer2[FLASH_PAGE_SIZE] = {0};
 
+static uint16_t G_imageAddressBuffer[MAX_FRAME_NUM + 1u];
+// static uint64_t frameIsFull = 0x00;
+/*****************************************************************************
+ * Function implementation - local ('static')
+ ******************************************************************************/
 /**
- * @brief 计算CRC32校验值
+ * @brief 辅助函数：重置 segment（可选重置0、1或同时重置两个）
+ * @param reset0 是否重置segment0
+ * @param reset1 是否重置segment1
+ * @param statusMagic0 segment0的magic
+ * @param statusMagic1 segment1的magic
+ * @param result 返回结果指针
  */
+static void resetSegments(
+    boolean_t reset0, boolean_t reset1,
+    uint32_t statusMagic0, uint32_t statusMagic1,
+    flash_result_t* result
+) {
+    if (reset0 && reset1) {
+        UARTIF_uartPrintf(0, "flash_manager start to init 2 sg! \n");
+        *result = resetSegment(FALSE, statusMagic0, 0);
+        if (*result != FLASH_OK) {
+            UARTIF_uartPrintf(0, "ERR: flash_manager 0x05! init sg 0 error!\n");
+        }
+        *result = resetSegment(TRUE, statusMagic1, 0);
+        if (*result != FLASH_OK) {
+            UARTIF_uartPrintf(0, "ERR: flash_manager 0x05! init sg 1 error!\n");
+        }
+        fmCtx.activeSegmentBaseStatus = MAGIC_LOW_ACTIVE;
+        fmCtx.gcInProgress = 0;
+    } else if (reset0) {
+        UARTIF_uartPrintf(0, "flash_manager start to init sg 0! \n");
+        *result = resetSegment(FALSE, statusMagic0, 0);
+        fmCtx.activeSegmentBaseStatus = MAGIC_LOW_ACTIVE;
+        if (*result != FLASH_OK) {
+            UARTIF_uartPrintf(0, "ERR: flash_manager 0x05! init sg 0 error!\n");
+        }
+    } else if (reset1) {
+        UARTIF_uartPrintf(0, "flash_manager start to init sg 1! \n");
+        *result = resetSegment(TRUE, statusMagic1, 0);
+        fmCtx.activeSegmentBaseStatus = MAGIC_HIGH_ACTIVE;
+        if (*result != FLASH_OK) {
+            UARTIF_uartPrintf(0, "ERR: flash_manager 0x05! init sg 1 error!\n");
+        }
+    }
+}
 
-
-/**
+/** 
  * @brief 读取segment头
  */
-static flash_result_t read_segment_header(uint32_t segment_base, segment_header_t* header)
+static flash_result_t readSegmentHeader(uint32_t segmentBase, boolean_t isDstHeaderHigh)
 {
-	uint32_t calculated_crc;
+    flash_result_t re = FLASH_OK;
+	uint32_t calculatedCrc;
     // 使用静态缓冲区读取数据
-    if (W25Q32_ReadData(segment_base, g_flash_buffer, sizeof(segment_header_t)) != 0) {
-        return FLASH_ERROR_READ_FAIL;
-    }
     
+    segment_header_t* header = NULL;
+
+    if (isDstHeaderHigh) {
+        header = &fmCtx.header1;
+    } else {
+        header = &fmCtx.header0;
+    }
+
+    if (W25Q32_ReadData(segmentBase, G_buffer1, sizeof(segment_header_t)) != 0) 
+    {
+        UARTIF_uartPrintf(0, "ERR: flash_manager 0x01! \n");
+        re = FLASH_ERROR_READ_FAIL;
+    }
+
     // 从缓冲区复制到结构体
-    header->header_magic = g_flash_buffer[0];
-    header->segment_id = g_flash_buffer[1];
-    header->status_magic = (uint32_t)g_flash_buffer[2] | ((uint32_t)g_flash_buffer[3] << 8) | 
-                          ((uint32_t)g_flash_buffer[4] << 16) | ((uint32_t)g_flash_buffer[5] << 24);
-    header->gc_count = (uint32_t)g_flash_buffer[6] | ((uint32_t)g_flash_buffer[7] << 8) | 
-                      ((uint32_t)g_flash_buffer[8] << 16) | ((uint32_t)g_flash_buffer[9] << 24);
-    header->crc32 = (uint32_t)g_flash_buffer[10] | ((uint32_t)g_flash_buffer[11] << 8) | 
-                   ((uint32_t)g_flash_buffer[12] << 16) | ((uint32_t)g_flash_buffer[13] << 24);
+    header->headerMagic = G_buffer1[0];
+    header->segmentId = G_buffer1[1];
+    header->statusMagic = (uint32_t)G_buffer1[2] | ((uint32_t)G_buffer1[3] << 8) | 
+                          ((uint32_t)G_buffer1[4] << 16) | ((uint32_t)G_buffer1[5] << 24);
+    header->gcCounter = (uint32_t)G_buffer1[6] | ((uint32_t)G_buffer1[7] << 8) | 
+                      ((uint32_t)G_buffer1[8] << 16) | ((uint32_t)G_buffer1[9] << 24);
+    header->crc32 = (uint32_t)G_buffer1[10] | ((uint32_t)G_buffer1[11] << 8) | 
+                   ((uint32_t)G_buffer1[12] << 16) | ((uint32_t)G_buffer1[13] << 24);
     
     // 验证头魔法数字
-    if (header->header_magic != SEGMENT_HEADER_MAGIC) {
-        return FLASH_ERROR_CRC_FAIL;
+    if (header->headerMagic != SEGMENT_HEADER_MAGIC) {
+        UARTIF_uartPrintf(0, "ERR: flash_manager 0x02! header magic error\n");
+        header->headerMagic = 0xE0;
+        re = FLASH_ERROR_INIT_FAIL;
+    }
+
+    if ((header->statusMagic != SEGMENT_MAGIC_ACTIVE) && (header->statusMagic != SEGMENT_MAGIC_BACKUP))
+    {
+        UARTIF_uartPrintf(0, "ERR: flash_manager 0x02! header magic error\n");
+        header->headerMagic = 0xE0;
+        re = FLASH_ERROR_INIT_FAIL;
     }
     
     // 验证CRC32 - 只校验有效部分（不包括crc32字段）
-    calculated_crc = calculate_crc32_default(g_flash_buffer, 10); // header_magic(1) + segment_id(1) + status_magic(4) + gc_count(4) = 10字节有效数据
-    if (calculated_crc != header->crc32) {
-        return FLASH_ERROR_CRC_FAIL;
+    calculatedCrc = calculate_crc32_default(G_buffer1, 10); // headerMagic(1) + segmentId(1) + statusMagic(4) + gcCounter(4) = 10字节有效数据
+    if (calculatedCrc != header->crc32) {
+        UARTIF_uartPrintf(0, "ERR: flash_manager 0x03! header crc error\n");
+        header->headerMagic = 0xE0;
+        re = FLASH_ERROR_CRC_FAIL;
     }
     
-    return FLASH_OK;
+    if (re != FLASH_OK) 
+    {
+        UARTIF_uartPrintf(0, "flash_manager read header not success! \n");
+        // UARTIF_uartPrintf(0, "buffer 0 is 0x%02x! \n", G_buffer1[0]);
+        // UARTIF_uartPrintf(0, "buffer 1 is 0x%02x! \n", G_buffer1[1]);
+        // UARTIF_uartPrintf(0, "buffer 2 is 0x%02x! \n", G_buffer1[2]);
+        // UARTIF_uartPrintf(0, "buffer 3 is 0x%02x! \n", G_buffer1[3]);
+        // UARTIF_uartPrintf(0, "buffer 4 is 0x%02x! \n", G_buffer1[4]);
+        // UARTIF_uartPrintf(0, "buffer 5 is 0x%02x! \n", G_buffer1[5]);
+        // UARTIF_uartPrintf(0, "buffer 6 is 0x%02x! \n", G_buffer1[6]);
+        // UARTIF_uartPrintf(0, "buffer 7 is 0x%02x! \n", G_buffer1[7]);
+        // UARTIF_uartPrintf(0, "buffer 8 is 0x%02x! \n", G_buffer1[8]);
+        // UARTIF_uartPrintf(0, "buffer 9 is 0x%02x! \n", G_buffer1[9]);
+        // UARTIF_uartPrintf(0, "buffer 10 is 0x%02x! \n", G_buffer1[10]);
+        // UARTIF_uartPrintf(0, "buffer 11 is 0x%02x! \n", G_buffer1[11]);
+        // UARTIF_uartPrintf(0, "buffer 12 is 0x%02x! \n", G_buffer1[12]);
+        // UARTIF_uartPrintf(0, "buffer 13 is 0x%02x! \n", G_buffer1[13]);
+
+    }
+    return re;
 }
 
 /**
  * @brief 写入segment头
  */
-static flash_result_t write_segment_header(uint32_t segment_base, const segment_header_t* header)
+static flash_result_t resetSegment(boolean_t isSetHiSegment, const uint32_t statusMagic, const uint32_t currentGcCounter)
 {
 	uint32_t crc32;
+    flash_result_t re = FLASH_OK;
+
     // 清空缓冲区
-    memset(g_flash_buffer, 0, FLASH_PAGE_SIZE);
-    
+    memset(G_buffer1, 0x00u, 256);
+
     // 将结构体字段复制到缓冲区
-    g_flash_buffer[0] = SEGMENT_HEADER_MAGIC;
-    g_flash_buffer[1] = header->segment_id;
-    g_flash_buffer[2] = (uint8_t)(header->status_magic & 0xFF);
-    g_flash_buffer[3] = (uint8_t)((header->status_magic >> 8) & 0xFF);
-    g_flash_buffer[4] = (uint8_t)((header->status_magic >> 16) & 0xFF);
-    g_flash_buffer[5] = (uint8_t)((header->status_magic >> 24) & 0xFF);
-    g_flash_buffer[6] = (uint8_t)(header->gc_count & 0xFF);
-    g_flash_buffer[7] = (uint8_t)((header->gc_count >> 8) & 0xFF);
-    g_flash_buffer[8] = (uint8_t)((header->gc_count >> 16) & 0xFF);
-    g_flash_buffer[9] = (uint8_t)((header->gc_count >> 24) & 0xFF);
-    
+    G_buffer1[0] = SEGMENT_HEADER_MAGIC;
+    G_buffer1[1] = isSetHiSegment ? 1 : 0;
+    G_buffer1[2] = (uint8_t)(statusMagic & 0xFF);
+    G_buffer1[3] = (uint8_t)((statusMagic >> 8) & 0xFF);
+    G_buffer1[4] = (uint8_t)((statusMagic >> 16) & 0xFF);
+    G_buffer1[5] = (uint8_t)((statusMagic >> 24) & 0xFF);
+    G_buffer1[6] = (uint8_t)(currentGcCounter & 0xFF);
+    G_buffer1[7] = (uint8_t)((currentGcCounter >> 8) & 0xFF);
+    G_buffer1[8] = (uint8_t)((currentGcCounter >> 16) & 0xFF);
+    G_buffer1[9] = (uint8_t)((currentGcCounter >> 24) & 0xFF);
+
     // 计算CRC32 - 只计算有效部分（不包括crc32字段）
-    crc32 = calculate_crc32_default(g_flash_buffer, 10); // header_magic(1) + segment_id(1) + status_magic(4) + gc_count(4) = 10字节有效数据
-    g_flash_buffer[10] = (uint8_t)(crc32 & 0xFF);
-    g_flash_buffer[11] = (uint8_t)((crc32 >> 8) & 0xFF);
-    g_flash_buffer[12] = (uint8_t)((crc32 >> 16) & 0xFF);
-    g_flash_buffer[13] = (uint8_t)((crc32 >> 24) & 0xFF);
-    
-    // 擦除第一个扇区
-    if (W25Q32_EraseSector(segment_base) != 0) {
-        return FLASH_ERROR_ERASE_FAIL;
-    }
-    
+    crc32 = calculate_crc32_default(G_buffer1, 10); // headerMagic(1) + segmentId(1) + statusMagic(4) + gcCounter(4) = 10字节有效数据
+    G_buffer1[10] = (uint8_t)(crc32 & 0xFF);
+    G_buffer1[11] = (uint8_t)((crc32 >> 8) & 0xFF);
+    G_buffer1[12] = (uint8_t)((crc32 >> 16) & 0xFF);
+    G_buffer1[13] = (uint8_t)((crc32 >> 24) & 0xFF);
+
+    // 擦除一个sg
+    eraseSegment( isSetHiSegment);
+
+    UARTIF_uartPrintf(0, "flash_manager: reset segment %s! \n", isSetHiSegment ? "1" : "0");
+    // UARTIF_uartPrintf(0, "buffer 0 is 0x%02x! \n", G_buffer1[0]);
+    // UARTIF_uartPrintf(0, "buffer 1 is 0x%02x! \n", G_buffer1[1]);
+    // UARTIF_uartPrintf(0, "buffer 2 is 0x%02x! \n", G_buffer1[2]);
+    // UARTIF_uartPrintf(0, "buffer 3 is 0x%02x! \n", G_buffer1[3]);
+    // UARTIF_uartPrintf(0, "buffer 4 is 0x%02x! \n", G_buffer1[4]);
+    // UARTIF_uartPrintf(0, "buffer 5 is 0x%02x! \n", G_buffer1[5]);
+    // UARTIF_uartPrintf(0, "buffer 6 is 0x%02x! \n", G_buffer1[6]);
+    // UARTIF_uartPrintf(0, "buffer 7 is 0x%02x! \n", G_buffer1[7]);
+    // UARTIF_uartPrintf(0, "buffer 8 is 0x%02x! \n", G_buffer1[8]);
+    // UARTIF_uartPrintf(0, "buffer 9 is 0x%02x! \n", G_buffer1[9]);
+    // UARTIF_uartPrintf(0, "buffer 10 is 0x%02x! \n", G_buffer1[10]);
+    // UARTIF_uartPrintf(0, "buffer 11 is 0x%02x! \n", G_buffer1[11]);
+    // UARTIF_uartPrintf(0, "buffer 12 is 0x%02x! \n", G_buffer1[12]);
+    // UARTIF_uartPrintf(0, "buffer 13 is 0x%02x! \n", G_buffer1[13]);
+
     // 写入header（写入整个页面以保持256字节对齐）
-    if (W25Q32_WritePage(segment_base, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_WRITE_FAIL;
+    if (W25Q32_WritePage(isSetHiSegment ? FLASH_SEGMENT1_BASE : FLASH_SEGMENT0_BASE , G_buffer1, FLASH_PAGE_SIZE) != 0) 
+    {
+        re = FLASH_ERROR_WRITE_FAIL;
     }
     
-    return FLASH_OK;
+    return re;
+}
+
+static void readBlock(uint8_t blockAddress)
+{
+    uint16_t i = 0;
+    uint32_t addr = 0;
+    uint8_t magic;
+    uint8_t dataId;
+
+    for (i = 0;i<256;i++)
+    {
+        addr = 0;
+        addr |= (uint32_t) (i << 8u);
+        addr |= (uint32_t) (blockAddress << 16u);
+        if ((addr != FLASH_SEGMENT0_BASE) && (addr != FLASH_SEGMENT1_BASE))
+        {
+            // UARTIF_uartPrintf(0, "Read page addr 0x%06lx! \n",addr);
+            memset(G_buffer1, 0, 256);
+            if (W25Q32_ReadData(addr, G_buffer1, 256) == 0)
+            {
+            // delay1ms(1);
+                magic = G_buffer1[0];
+                if (magic == DATA_PAGE_MAGIC || magic == MAGIC_BW_IMAGE_HEADER || magic == MAGIC_RED_IMAGE_HEADER)
+                {
+                    dataId = G_buffer1[1];
+                    if (fmCtx.entriesCountMax[magic & 0x03] > dataId)
+                    {
+                        fmCtx.entries[magic & 0x03][dataId] = (uint16_t)(addr >> 8u);
+                    }
+                    else
+                    {
+                        UARTIF_uartPrintf(0, "ERR: flash_manager 0x07! data id out of range\n");
+                    }
+                }
+                else if (magic == MAGIC_BW_IMAGE_DATA || magic == MAGIC_RED_IMAGE_DATA)
+                {
+                    // do nothing
+                }
+                else if (magic == 0xff)
+                {
+                    if ((G_buffer1[1] == 0xff) && (G_buffer1[3] == 0xff))
+                    {
+                        UARTIF_uartPrintf(0, "flash_manager found last block! \n");
+                    }
+                    else 
+                    {
+                        UARTIF_uartPrintf(0, "ERR: flash_manager 0x07! last block error\n");
+                    }
+                    fmCtx.nextWriteAddress = blockAddress << 8u;
+                    fmCtx.nextWriteAddress |= i;
+                    // UARTIF_uartPrintf(0, "flash_manager found next write address 0x%04x!!! \n", fmCtx.nextWriteAddress);
+                    break;
+                }
+                else
+                {
+                    UARTIF_uartPrintf(0, "ERR: flash_manager 0x06! unknow magic\n");
+                }
+            }
+        }
+    }
 }
 
 /**
  * @brief 扫描segment中的所有page，构建内存映射表
  */
-static flash_result_t scan_segment_pages(flash_manager_t* manager, uint32_t segment_base)
+static flash_result_t scanSegmentPages(void)
 {
-    uint32_t page_address;
-    uint32_t i;
-    uint8_t magic;
-    uint16_t data_id;
-    
-    manager->data_count = 0;
-    
+    uint8_t endBlockAddr = 0x20;
+    uint8_t blockAddr = 0x00;
+ 
     // 从第1个page开始扫描（第0个是header）
-    for (i = 1; i < FLASH_PAGES_PER_SEGMENT; i++) {
-        page_address = segment_base + i * FLASH_PAGE_SIZE;
-        
-        // 只读取前8字节元数据（magic + data_id + data_size + crc32）
-        if (W25Q32_ReadData(page_address, g_flash_buffer, 8) != 0) {
-            return FLASH_ERROR_READ_FAIL;
-        }
-        
-        // 解析元数据
-        magic = g_flash_buffer[0];
-        data_id = (uint16_t)g_flash_buffer[1] | ((uint16_t)g_flash_buffer[2] << 8);
-        
-        // 检查是否为空page
-        if (data_id == INVALID_DATA_ID) {
-            // 找到第一个空page，设置下次写入地址
-            manager->next_write_address = page_address;
+    blockAddr = (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE) ? 0x00 : 0x20;
+    endBlockAddr = blockAddr + 0x20;
+    for (; blockAddr < endBlockAddr; blockAddr++)
+    {
+        readBlock(blockAddr);
+        if (fmCtx.nextWriteAddress != 0xffff)
+        {
             break;
         }
-        
-        // 检查是否为有效的页面类型
-        if (magic == DATA_PAGE_MAGIC ||           // 普通数据页
-            magic == MAGIC_IMAGE_HEADER ||        // 图像头页
-            magic == MAGIC_BW_IMAGE_DATA ||       // 黑白图像数据页
-            magic == MAGIC_RED_IMAGE_DATA) {      // 红白图像数据页
-            
-            // 添加到映射表（不进行CRC验证，提高扫描速度）
-            if (add_data_entry(manager, data_id, page_address) != FLASH_OK) {
-                return FLASH_ERROR_INIT_FAIL;
+    }
+    if (fmCtx.nextWriteAddress == 0xffff)
+    {
+        // 如果扫描完所有page都没找到空page，说明segment已满
+        fmCtx.gcInProgress = 1;
+    }
+    else 
+    {
+        UARTIF_uartPrintf(0, "flash_manager next write address is 0x%04x\n", fmCtx.nextWriteAddress);
+    }
+    return FLASH_OK;
+}
+
+static flash_result_t scanImageDataPages(uint8_t magic, uint8_t slotId)
+{
+    uint32_t currentAddr = 0x00;
+    uint32_t endAddr = 0x00;
+    uint8_t frameNum = 0;
+    uint64_t frameIsFull = 0x00;
+    flash_result_t re = FLASH_OK;
+
+    currentAddr = (uint32_t)((fmCtx.nextWriteAddress - 1) << 8u);
+    endAddr = (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE) ? FLASH_SEGMENT0_BASE : FLASH_SEGMENT1_BASE;
+    for (; currentAddr > endAddr; currentAddr -= FLASH_PAGE_SIZE)
+    {
+        memset(G_buffer1, 0, 256);
+        if (W25Q32_ReadData(currentAddr, G_buffer1, 256) == 0)
+        {
+            if (G_buffer1[0] == magic && G_buffer1[2] == slotId)
+            {
+                frameNum = G_buffer1[1];
+                if ((frameIsFull & ((uint64_t)1u << frameNum)) != 0u)
+                {
+                    continue;
+                }
+ 
+                if (frameNum > MAX_FRAME_NUM)
+                {
+                    UARTIF_uartPrintf(0, "ERR: flash_manager 0x09! image frame num out of range\n");
+                    re = FLASH_ERROR_IMAGE_FRAME_LOST;
+                    break;
+                }
+                G_imageAddressBuffer[frameNum] = (uint16_t)((currentAddr & 0x00ffff00) >> 8u);
+                // UARTIF_uartPrintf(0, "scanImageDataPages Image %d: Address 0x%04x \n", frameNum, G_imageAddressBuffer[frameNum]);
+
+                frameIsFull |= ((uint64_t)1u << frameNum);
+                if (frameIsFull == 0x1FFFFFFFFFFFFFFF)
+                {
+                    UARTIF_uartPrintf(0, "flash_manager found all image data page! \n");
+                    break;
+                }
+                else 
+                {
+                    // UARTIF_uartPrintf(0, "frameIsFull is 0x%016lx! \n", frameIsFull);
+                }
             }
         }
-        // 对于无效魔法数字的页面，直接跳过
     }
-    
-    // 如果扫描完所有page都没找到空page，说明segment已满
-    if (i >= FLASH_PAGES_PER_SEGMENT) {
-        manager->next_write_address = INVALID_ADDRESS;
-    }
-    
-    return FLASH_OK;
-}
-
-/**
- * @brief 在映射表中查找数据条目
- */
-static int16_t find_data_entry(flash_manager_t* manager, uint16_t data_id)
-{
-    uint16_t i;
-    
-    for (i = 0; i < manager->data_count; i++) {
-        if (manager->data_entries[i].data_id == data_id) {
-            return i;
+    if (re == FLASH_OK)
+    {
+        if (frameIsFull != 0x1FFFFFFFFFFFFFFF)
+        {
+            re = FLASH_ERROR_IMAGE_FRAME_LOST;
         }
     }
-    
-    return -1;
+    return re;
 }
 
-/**
- * @brief 添加数据条目到映射表
- */
-static flash_result_t add_data_entry(flash_manager_t* manager, uint16_t data_id, uint32_t page_address)
+static flash_result_t checkAndDoGarbageCollection(void)
 {
-	int16_t index;
-    if (manager->data_count >= MAX_DATA_ENTRIES) {
-        return FLASH_ERROR_NO_SPACE;
+    flash_result_t re = FLASH_OK;
+    uint32_t nextWriteAddress = (uint32_t)(fmCtx.nextWriteAddress << 8u);
+    if (fmCtx.gcInProgress)
+    {
+        // UARTIF_uartPrintf(0, "go to gc 0\n");
+        // re = garbageCollect();
+        UARTIF_uartPrintf(0, "Gc on going! \n");
     }
-    
-    // 检查是否已存在，如果存在则更新地址
-    index = find_data_entry(manager, data_id);
-    if (index >= 0) {
-        manager->data_entries[index].page_address = page_address;
-    } else {
-        // 添加新条目
-        manager->data_entries[manager->data_count].data_id = data_id;
-        manager->data_entries[manager->data_count].page_address = page_address;
-        manager->data_count++;
-    }
-    
-    return FLASH_OK;
-}
+    else 
+    {
+        if (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE)
+        {
+            if (nextWriteAddress >= FLASH_SEGMENT1_BASE)
+            {
+                fmCtx.gcInProgress = 1;
+                UARTIF_uartPrintf(0, "go to gc 1\n");
 
-/**
- * @brief 从映射表中移除数据条目
- */
-static flash_result_t remove_data_entry(flash_manager_t* manager, uint16_t data_id)
-{
-    int16_t index;
-    uint16_t i;
-    
-    index = find_data_entry(manager, data_id);
-    if (index < 0) {
-        return FLASH_ERROR_NOT_FOUND;
-    }
-    
-    // 将后面的条目前移
+                re = garbageCollect();
+            }
+        }
+        else 
+        {
+            if (nextWriteAddress >= FLASH_TOTAL_SIZE)
+            {
+                fmCtx.gcInProgress = 1;
+                UARTIF_uartPrintf(0, "go to gc 2\n");
 
-    for (i = index; i < manager->data_count - 1; i++) {
-        manager->data_entries[i] = manager->data_entries[i + 1];
+                re = garbageCollect();
+            }
+        }
     }
-    
-    manager->data_count--;
-    return FLASH_OK;
+    return re;
 }
 
 /**
  * @brief 擦除整个segment
  */
-static flash_result_t erase_segment(uint32_t segment_base)
+static flash_result_t eraseSegment(boolean_t eraseHiSegment)
 {
-    uint32_t sector_address;
+    uint32_t sectorAddress = 0x00;
     uint32_t i;
-    
+    uint8_t startAddr = 0;
+
     // 按扇区擦除整个segment
-    for (i = 0; i < FLASH_SEGMENT_SIZE; i += FLASH_SECTOR_SIZE) {
-        sector_address = segment_base + i;
-        if (W25Q32_EraseSector(sector_address) != 0) {
-            return FLASH_ERROR_ERASE_FAIL;
+    startAddr = (eraseHiSegment) ? 0x20 : 0x00;
+
+    UARTIF_uartPrintf(0, "flash_manager: start to erase block 0x%02x to 0x%02x! \n", startAddr, startAddr + 0x1f);
+    for (i = startAddr; i < (startAddr + 0x1f); i++) 
+    {
+        sectorAddress = 0x00;
+        sectorAddress |= i << 16;
+        W25Q32_Erase64k(sectorAddress);
+    }
+    return FLASH_OK;
+}
+
+static flash_result_t readImageHeaderIntoBuffer(uint8_t magic, uint8_t slotId)
+{
+    // uint8_t i = 0;
+    flash_result_t result = FLASH_OK;
+    memset(G_buffer2, 0, FLASH_PAGE_SIZE);
+    result = FM_readData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+    if (result == FLASH_OK)
+    {
+        // for (i = 0; i < MAX_FRAME_NUM + 1; i++)
+        // {
+        //     UARTIF_uartPrintf(0, "Image %d: Block 0x%02x, Page 0x%02x\n", i, G_buffer2[2*i + 1], G_buffer2[2*i]);
+        // }
+        // memcpy_s(G_imageAddressBuffer, sizeof(G_imageAddressBuffer), G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+        memcpy(G_imageAddressBuffer, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+        // for (i = 0; i < MAX_FRAME_NUM + 1; i++)
+        // {
+        //     UARTIF_uartPrintf(0, "Image %d: Address 0x%04x \n", i, G_imageAddressBuffer[i]);
+        // }
+    }
+    return result;
+}
+
+static flash_result_t copyPage(uint16_t srcAddr, uint16_t destAddr, boolean_t isDestNext)
+{
+    uint32_t srcAddress = 0;
+    uint32_t destAddress = 0;
+    flash_result_t result = FLASH_OK;
+
+    srcAddress |= (uint32_t) (srcAddr << 8u);
+
+    if (isDestNext)
+    {
+        destAddress |= (uint32_t) (fmCtx.nextWriteAddress << 8u);
+    }
+    else 
+    {
+        destAddress |= (uint32_t) (destAddr << 8u);
+    }
+    UARTIF_uartPrintf(0, "Copy data from 0x%06lx to 0x%06lx! \n", srcAddress, destAddress);
+
+    // 读取源page
+    if (result == FLASH_OK)
+    {
+        memset(G_buffer1, 0, 256);
+        if (W25Q32_ReadData(srcAddress, G_buffer1, FLASH_PAGE_SIZE) != 0) 
+        {
+            result =  FLASH_ERROR_READ_FAIL;
         }
     }
-    
-    return FLASH_OK;
+    // 写入目标page
+    if (result == FLASH_OK)
+    {
+        if (W25Q32_WritePage(destAddress, G_buffer1, FLASH_PAGE_SIZE) != 0) 
+        {
+            return FLASH_ERROR_WRITE_FAIL;
+        }
+    }
+    return result;
 }
 
 /**
  * @brief 复制有效页面到备用segment
  */
-static flash_result_t copy_valid_pages(flash_manager_t* manager)
+static flash_result_t copyValidPages(void)
 {
-	    uint16_t i;
-// 复制有效数据到备份段
-    uint32_t dest_address;
-    
-    dest_address = manager->backup_segment_base + FLASH_PAGE_SIZE; // 跳过header
+	uint8_t i, j, k;
 
-    
-    for (i = 0; i < manager->data_count; i++) {
-        // 读取源page
-        if (W25Q32_ReadData(manager->data_entries[i].page_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-            return FLASH_ERROR_READ_FAIL;
+    flash_result_t result = FLASH_OK;
+
+    for (i = 0; i < MAX_DATA_ENTRIES; i++) 
+    {
+        if (fmCtx.dataEntries[i] != 0xffff)
+        {
+            result = copyPage(fmCtx.dataEntries[i], 0, TRUE);
+            if (result != FLASH_OK)
+            {
+                UARTIF_uartPrintf(0, "ERR: flash_manager 0x10! copy data page fail entry %d\n", i);
+                // 删除映射表中的地址
+                fmCtx.dataEntries[i] = 0xffff;
+            }
+            else
+            {
+                // 更新映射表中的地址
+                fmCtx.dataEntries[i] = fmCtx.nextWriteAddress;
+                // 更新Next Write Address
+                fmCtx.nextWriteAddress++;
+            }
         }
-        
-        // 写入目标page
-        if (W25Q32_WritePage(dest_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-            return FLASH_ERROR_WRITE_FAIL;
-        }
-        
-        // 更新映射表中的地址
-        manager->data_entries[i].page_address = dest_address;
-        dest_address += FLASH_PAGE_SIZE;
     }
-    
-    // 更新下次写入地址
-    manager->next_write_address = dest_address;
-    
-    return FLASH_OK;
+
+    for (k = 1; k < 3; k++)
+    {
+        for (i = 0; i < MAX_IMAGE_ENTRIES; i++) 
+        {
+            if (fmCtx.entries[k][i] != 0xffff)
+            {
+                memset(G_imageAddressBuffer, 0xff, sizeof(G_imageAddressBuffer));
+                result = readImageHeaderIntoBuffer(DATA_PAGE_MAGIC + k, i);
+                if (result != FLASH_OK)
+                {
+                    // 删除映射表中的地址
+                    UARTIF_uartPrintf(0, "ERR: flash_manager 0x10! read image header into buffer fail\n");
+                    fmCtx.entries[k][i] = 0xffff;
+                    continue;
+                }
+                for (j = 0; j < MAX_FRAME_NUM + 1; j++)
+                {
+                    if (G_imageAddressBuffer[j] != 0xffff)
+                    {
+                        result = copyPage(G_imageAddressBuffer[j], 0, TRUE);
+                    }
+                    if (result == FLASH_OK)
+                    {
+                        fmCtx.nextWriteAddress++;
+                    }
+                    else
+                    {
+                        UARTIF_uartPrintf(0, "ERR: flash_manager 0x10! copy image data page fail entry %d frame %d\n", i, j);
+                        break;
+                    }
+                }
+                if (result != FLASH_OK)
+                {
+                    // 删除映射表中的地址
+                    fmCtx.entries[k][i] = 0xffff;
+                    continue;
+                }
+                // else
+                // {
+                //     result = FM_writeImageHeader(DATA_PAGE_MAGIC + k, i);
+                // }
+            }
+        }
+    }
+        
+    return result;
 }
 
-/**
- * @brief 初始化Flash管理器
- */
-flash_result_t flash_manager_init(flash_manager_t* manager)
+static flash_result_t judgeWhichSegmentIsActive(void)
 {
-    segment_header_t header0, header1;
-    flash_result_t result;
-    
-    if (manager == NULL) {
-        return FLASH_ERROR_INVALID_PARAM;
-    }
-    
-    // 初始化管理器
-    memset(manager, 0, sizeof(flash_manager_t));
-    manager->active_segment_base = FLASH_SEGMENT0_BASE;
-    manager->backup_segment_base = FLASH_SEGMENT1_BASE;
-    
-    // 读取两个segment的header
-    result = read_segment_header(FLASH_SEGMENT0_BASE, &header0);
-    if (result != FLASH_OK && result != FLASH_ERROR_CRC_FAIL) {
-        return result;
-    }
-    
-    result = read_segment_header(FLASH_SEGMENT1_BASE, &header1);
-    if (result != FLASH_OK && result != FLASH_ERROR_CRC_FAIL) {
-        return result;
-    }
-    
-    // 根据header状态确定激活segment
-    if (header0.status_magic == SEGMENT_MAGIC_ACTIVE && header1.status_magic == SEGMENT_MAGIC_BACKUP) {
-        // 正常情况：segment0激活，segment1备用
-        manager->active_segment_base = FLASH_SEGMENT0_BASE;
-        manager->backup_segment_base = FLASH_SEGMENT1_BASE;
-    } else if (header1.status_magic == SEGMENT_MAGIC_ACTIVE && header0.status_magic == SEGMENT_MAGIC_BACKUP) {
-        // segment1激活，segment0备用
-        manager->active_segment_base = FLASH_SEGMENT1_BASE;
-        manager->backup_segment_base = FLASH_SEGMENT0_BASE;
-    } else if (header0.status_magic == SEGMENT_MAGIC_GC || header1.status_magic == SEGMENT_MAGIC_GC) {
-        // 垃圾回收中断，需要恢复
-        manager->gc_in_progress = 1;
-        // 简单处理：使用非GC状态的segment作为激活segment
-        if (header0.status_magic != SEGMENT_MAGIC_GC) {
-            manager->active_segment_base = FLASH_SEGMENT0_BASE;
-            manager->backup_segment_base = FLASH_SEGMENT1_BASE;
-        } else {
-            manager->active_segment_base = FLASH_SEGMENT1_BASE;
-            manager->backup_segment_base = FLASH_SEGMENT0_BASE;
-        }
-    } else {
-        // 都是未初始化状态，初始化segment0为激活
-        segment_header_t init_header;
-        memset(&init_header, 0, sizeof(segment_header_t));
-        init_header.status_magic = SEGMENT_MAGIC_ACTIVE;
-        init_header.segment_id = 0;
-        init_header.gc_count = 0;
-        
-        result = write_segment_header(FLASH_SEGMENT0_BASE, &init_header);
-        if (result != FLASH_OK) {
-            return result;
-        }
-        
-        manager->active_segment_base = FLASH_SEGMENT0_BASE;
-        manager->backup_segment_base = FLASH_SEGMENT1_BASE;
-        manager->next_write_address = FLASH_SEGMENT0_BASE + FLASH_PAGE_SIZE;
-        return FLASH_OK;
-    }
-    
-    // 扫描激活segment构建映射表
-    return scan_segment_pages(manager, manager->active_segment_base);
-}
+    flash_result_t result = FLASH_OK;
+    uint8_t sg0Tail, sg1Tail;
 
-/**
- * @brief 写入数据
- */
-flash_result_t flash_write_data(flash_manager_t* manager, uint16_t data_id, const uint8_t* data, uint16_t size)
-{
-    flash_result_t result;
-    uint32_t crc32;
-    uint32_t segment_end;
-    if (manager == NULL || data == NULL || size == 0 || size > 247 || data_id == INVALID_DATA_ID) {
-        return FLASH_ERROR_INVALID_PARAM;
+    memset(G_buffer1, 0, 256);
+
+    if (W25Q32_ReadData(FLASH_SEGMENT1_BASE - 0x100, G_buffer1, sizeof(segment_header_t)) != 0) 
+    {
+        result = FLASH_ERROR_READ_FAIL;
     }
-    
-    // 检查是否需要垃圾回收
-    if (manager->next_write_address == INVALID_ADDRESS) {
-        result = flash_garbage_collect(manager);
-        if (result != FLASH_OK) {
-            return result;
+    else
+    {
+        sg0Tail = G_buffer1[0];
+    }
+
+    if (result == FLASH_OK)
+    {
+        memset(G_buffer1, 0, 256);
+
+        if (W25Q32_ReadData(FLASH_TOTAL_SIZE - 0x100, G_buffer1, sizeof(segment_header_t)) != 0) 
+        {
+            result = FLASH_ERROR_READ_FAIL;
+        }
+        else
+        {
+            sg1Tail = G_buffer1[0];
         }
     }
-    
-    // 清空缓冲区
-    memset(g_flash_buffer, 0, FLASH_PAGE_SIZE);
-    
-    // 将数据页字段复制到缓冲区
-    g_flash_buffer[0] = DATA_PAGE_MAGIC; // 魔法数字
-    g_flash_buffer[1] = (uint8_t)(data_id & 0xFF);
-    g_flash_buffer[2] = (uint8_t)((data_id >> 8) & 0xFF);
-    g_flash_buffer[3] = size;
-    
-    // 计算CRC32（只计算数据部分）
-    crc32 = calculate_crc32_default(data, size);
-    g_flash_buffer[4] = (uint8_t)(crc32 & 0xFF);
-    g_flash_buffer[5] = (uint8_t)((crc32 >> 8) & 0xFF);
-    g_flash_buffer[6] = (uint8_t)((crc32 >> 16) & 0xFF);
-    g_flash_buffer[7] = (uint8_t)((crc32 >> 24) & 0xFF);
-    
-    memcpy(&g_flash_buffer[8], data, size);
-    
-    // 写入Flash
-    if (W25Q32_WritePage(manager->next_write_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_WRITE_FAIL;
+
+    if (result == FLASH_OK)
+    {
+        if ((sg0Tail == DATA_PAGE_MAGIC ||
+            sg0Tail == MAGIC_BW_IMAGE_DATA ||
+            sg0Tail == MAGIC_RED_IMAGE_DATA ||
+            sg0Tail == MAGIC_BW_IMAGE_HEADER ||
+            sg0Tail == MAGIC_RED_IMAGE_HEADER) && 
+            (sg1Tail != DATA_PAGE_MAGIC ||
+            sg1Tail != MAGIC_BW_IMAGE_DATA ||
+            sg1Tail != MAGIC_RED_IMAGE_DATA ||
+            sg1Tail != MAGIC_BW_IMAGE_HEADER ||
+            sg1Tail != MAGIC_RED_IMAGE_HEADER))
+        {
+            fmCtx.activeSegmentBaseStatus = MAGIC_LOW_ACTIVE;
+            UARTIF_uartPrintf(0, "regc flash_manager low active\n");
+        }
+        else if ((sg1Tail == DATA_PAGE_MAGIC ||
+            sg1Tail == MAGIC_BW_IMAGE_DATA ||
+            sg1Tail == MAGIC_RED_IMAGE_DATA ||
+            sg1Tail == MAGIC_BW_IMAGE_HEADER ||
+            sg1Tail == MAGIC_RED_IMAGE_HEADER) && 
+            (sg0Tail != DATA_PAGE_MAGIC ||
+            sg0Tail != MAGIC_BW_IMAGE_DATA ||
+            sg0Tail != MAGIC_RED_IMAGE_DATA ||
+            sg0Tail != MAGIC_BW_IMAGE_HEADER ||
+            sg0Tail != MAGIC_RED_IMAGE_HEADER))
+        {
+            fmCtx.activeSegmentBaseStatus = MAGIC_HIGH_ACTIVE;
+            UARTIF_uartPrintf(0, "regc flash_manager high active\n");
+        }
+        else if (sg0Tail == 0xff && sg1Tail == 0xff)
+        {
+            // to do: scan all pages to find last write page
+            // if not found, reset 2 segments
+            UARTIF_uartPrintf(0, "flash_manager no active segment, reset 2 segments\n");
+            result = FLASH_ERROR_INIT_FAIL;
+        }
+        else
+        {
+            UARTIF_uartPrintf(0, "ERR: flash_manager 0x09! regc error, reset 2 segments\n");
+            result = FLASH_ERROR_INIT_FAIL;
+        }
     }
-    
-    // 更新映射表
-    result = add_data_entry(manager, data_id, manager->next_write_address);
-    if (result != FLASH_OK) {
-        return result;
-    }
-    
-    // 更新下次写入地址
-    manager->next_write_address += FLASH_PAGE_SIZE;
-    
-    // 检查是否到达segment末尾
-    segment_end = manager->active_segment_base + FLASH_SEGMENT_SIZE;
-    if (manager->next_write_address >= segment_end) {
-        manager->next_write_address = INVALID_ADDRESS;
-    }
-    
-    return FLASH_OK;
+
+    return result;
 }
 
-/**
- * @brief 读取数据
- */
-flash_result_t flash_read_data(flash_manager_t* manager, uint16_t data_id, uint8_t* data, uint16_t* size)
+static flash_result_t checkArguments(uint8_t magic, uint16_t dataId, const uint8_t* data, uint16_t size)
 {
-    int16_t index;
-    uint32_t calculated_crc, stored_crc;
-    uint8_t page_data_size;
-    
-    if (manager == NULL || data == NULL || size == NULL || data_id == INVALID_DATA_ID) {
-        return FLASH_ERROR_INVALID_PARAM;
-    }
-    
-    // 在映射表中查找
-    index = find_data_entry(manager, data_id);
-    if (index < 0) {
-        return FLASH_ERROR_NOT_FOUND;
-    }
-    
-    // 读取数据页到缓冲区
-    if (W25Q32_ReadData(manager->data_entries[index].page_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_READ_FAIL;
-    }
-    
-    // 验证魔法数字
-    if (g_flash_buffer[0] != DATA_PAGE_MAGIC) {
-        return FLASH_ERROR_INVALID_PARAM;
-    }
-    
-    // 从缓冲区解析数据页字段
-    page_data_size = g_flash_buffer[3];
-    stored_crc = (uint32_t)g_flash_buffer[4] | ((uint32_t)g_flash_buffer[5] << 8) | 
-                 ((uint32_t)g_flash_buffer[6] << 16) | ((uint32_t)g_flash_buffer[7] << 24);
-    
-    // 验证CRC32（只验证数据部分）
-    calculated_crc = calculate_crc32_default(&g_flash_buffer[8], page_data_size);
-    if (calculated_crc != stored_crc) {
-        return FLASH_ERROR_CRC_FAIL;
-    }
-    
-    // 检查缓冲区大小
-    if (*size < page_data_size) {
-        *size = page_data_size;
-        return FLASH_ERROR_INVALID_PARAM;
-    }
-    
-    // 复制数据
-    memcpy(data, &g_flash_buffer[8], page_data_size);
-    *size = page_data_size;
-    
-    return FLASH_OK;
-}
+    flash_result_t result = FLASH_OK;
+    uint8_t slotId, frameNum;
 
-/**
- * @brief 删除数据
- */
-flash_result_t flash_delete_data(flash_manager_t* manager, uint16_t data_id)
-{
-    if (manager == NULL || data_id == INVALID_DATA_ID) {
-        return FLASH_ERROR_INVALID_PARAM;
+    if (magic != MAGIC_BW_IMAGE_DATA && magic != MAGIC_RED_IMAGE_DATA && magic != DATA_PAGE_MAGIC
+        && magic != MAGIC_BW_IMAGE_HEADER && magic != MAGIC_RED_IMAGE_HEADER)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
+    }
+
+    if (data == NULL || size == 0 || size > PAYLOAD_SIZE)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
     }
     
-    return remove_data_entry(manager, data_id);
+    if (magic == DATA_PAGE_MAGIC && dataId >= MAX_DATA_ENTRIES)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
+    }
+
+    if (magic == MAGIC_BW_IMAGE_DATA || magic == MAGIC_RED_IMAGE_DATA)
+    {
+        slotId = (uint8_t)((dataId & 0xff00u) >> 8u);
+        frameNum = (uint8_t)(dataId & 0xffu);
+        if (slotId >= MAX_IMAGE_ENTRIES || frameNum > MAX_FRAME_NUM)
+        {
+            result = FLASH_ERROR_INVALID_PARAM;
+        }
+    }
+    return result;
 }
 
 /**
  * @brief 执行垃圾回收
  */
-flash_result_t flash_garbage_collect(flash_manager_t* manager)
+static flash_result_t garbageCollect(void)
 {
-    segment_header_t header;
-    flash_result_t result;
-    segment_header_t active_header;
-	uint32_t new_gc_count;
-	uint32_t temp;
-    if (manager == NULL) {
-        return FLASH_ERROR_INVALID_PARAM;
-    }
-    
-    manager->gc_in_progress = 1;
-    
-    // 1. 将备用segment标记为垃圾回收中
-    memset(&header, 0, sizeof(segment_header_t));
-    header.status_magic = SEGMENT_MAGIC_GC;
-    header.segment_id = (manager->backup_segment_base == FLASH_SEGMENT0_BASE) ? 0 : 1;
-    header.gc_count = 0; // 垃圾回收计数将在完成后更新
-    
-    result = write_segment_header(manager->backup_segment_base, &header);
-    if (result != FLASH_OK) {
-        manager->gc_in_progress = 0;
-        return result;
-    }
-    
-    // 2. 复制有效数据
-    result = copy_valid_pages(manager);
-    if (result != FLASH_OK) {
-        manager->gc_in_progress = 0;
-        return result;
-    }
-    
-    // 3. 擦除原激活segment
-    result = erase_segment(manager->active_segment_base);
-    if (result != FLASH_OK) {
-        manager->gc_in_progress = 0;
-        return result;
-    }
-    
-    // 4. 将原激活segment标记为备用
-    memset(&header, 0, sizeof(segment_header_t));
-    header.status_magic = SEGMENT_MAGIC_BACKUP;
-    header.segment_id = (manager->active_segment_base == FLASH_SEGMENT0_BASE) ? 0 : 1;
-    header.gc_count = 0;
-    
-    result = write_segment_header(manager->active_segment_base, &header);
-    if (result != FLASH_OK) {
-        manager->gc_in_progress = 0;
-        return result;
-    }
-    
-    // 5. 读取当前激活segment的gc_count并递增
+    uint8_t i, k;
+    flash_result_t result = FLASH_OK;
+    UARTIF_uartPrintf(0, "flash_manager start garbage collecting! \n");
 
-    result = read_segment_header(manager->active_segment_base, &active_header);
-    new_gc_count = (result == FLASH_OK) ? active_header.gc_count + 1 : 1;
-    
-    // 将新segment标记为激活
-    memset(&header, 0, sizeof(segment_header_t));
-    header.status_magic = SEGMENT_MAGIC_ACTIVE;
-    header.segment_id = (manager->backup_segment_base == FLASH_SEGMENT0_BASE) ? 0 : 1;
-    header.gc_count = new_gc_count;
-    
-    result = write_segment_header(manager->backup_segment_base, &header);
-    if (result != FLASH_OK) {
-        manager->gc_in_progress = 0;
-        return result;
+    fmCtx.currentGcCounter ++;
+    // 1. 将备用segment标记为激活
+    if (result == FLASH_OK)
+    {
+        UARTIF_uartPrintf(0, "flash_manager garbage collecting step one \n");
+        result = resetSegment((fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE), SEGMENT_MAGIC_ACTIVE, fmCtx.currentGcCounter);
+        fmCtx.nextWriteAddress = (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE) ? 0x2001 : 0x0001;
+    }
+
+    // 2. 复制有效数据
+    if (result == FLASH_OK)
+    {
+        UARTIF_uartPrintf(0, "flash_manager garbage collecting step two \n");
+        result = copyValidPages();
     }
     
-    // 6. 交换激活和备用segment
-    temp = manager->active_segment_base;
-    manager->active_segment_base = manager->backup_segment_base;
-    manager->backup_segment_base = temp;
+    // 3. 将原激活segment标记为备用
+    if (result == FLASH_OK)
+    {
+        UARTIF_uartPrintf(0, "flash_manager garbage collecting step three \n");
+        if (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE)
+        {
+            fmCtx.activeSegmentBaseStatus = MAGIC_HIGH_ACTIVE;
+        }
+        else 
+        {
+            fmCtx.activeSegmentBaseStatus = MAGIC_LOW_ACTIVE;
+        }
+        result = resetSegment((fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE), SEGMENT_MAGIC_BACKUP, 0);
+    }
     
-    manager->gc_in_progress = 0;
-    return FLASH_OK;
+    // 4. Update image header if needed
+    for (k = 1; k < 3; k++)
+    {
+        for (i = 0; i < MAX_IMAGE_ENTRIES; i++) 
+        {
+            if (fmCtx.entries[k][i] != 0xffff)
+            {
+                result = FM_writeImageHeader(DATA_PAGE_MAGIC + k, i);
+                if (result != FLASH_OK)
+                {
+                    UARTIF_uartPrintf(0, "ERR: flash_manager 0x08! write image header fail entry %d, type %d\n", i, k);
+                }
+            }
+        }
+    }
+
+    if (result == FLASH_OK)
+    {
+        UARTIF_uartPrintf(0, "flash_manager garbage collecting finished successfully! \n");
+
+        fmCtx.gcInProgress = 0;
+    }
+    else
+    {
+        UARTIF_uartPrintf(0, "ERR: flash_manager 0x08! gc error: %d\n", result);
+    }
+    
+    return result;
+}
+
+
+
+
+/*****************************************************************************
+ * Function implementation - global ('extern')
+ ******************************************************************************/
+
+/**
+ * @brief 初始化Flash管理器
+ */
+
+flash_result_t FM_init()
+{
+    boolean_t needToInitList = FALSE;
+    flash_result_t result = FLASH_OK;
+    memset(fmCtx.dataEntries, 0xff, sizeof(uint16_t) * MAX_DATA_ENTRIES);
+    memset(fmCtx.imageBwEntries, 0xff, sizeof(uint16_t) * MAX_IMAGE_ENTRIES);
+    memset(fmCtx.imageRedEntries, 0xff, sizeof(uint16_t) * MAX_IMAGE_ENTRIES);
+    fmCtx.nextWriteAddress = 0xffff;
+
+    fmCtx.entries[0] = fmCtx.dataEntries;
+    fmCtx.entries[1] = fmCtx.imageBwEntries;
+    fmCtx.entries[2] = fmCtx.imageRedEntries;
+    fmCtx.entriesCountMax[0] = MAX_DATA_ENTRIES;
+    fmCtx.entriesCountMax[1] = MAX_IMAGE_ENTRIES;
+    fmCtx.entriesCountMax[2] = MAX_IMAGE_ENTRIES;
+    
+    // 读取两个segment的header
+    if (result == FLASH_OK)
+    {
+        // 初始化管理器
+   
+        result = readSegmentHeader(FLASH_SEGMENT0_BASE, FALSE);
+        if (result == FLASH_ERROR_READ_FAIL)
+        {
+            UARTIF_uartPrintf(0, "ERR: flash_manager 0x04! header0 error\n");
+        }
+        else
+        {
+            result = readSegmentHeader(FLASH_SEGMENT1_BASE, TRUE);
+            if (result == FLASH_ERROR_READ_FAIL)
+            {
+                UARTIF_uartPrintf(0, "ERR: flash_manager 0x04! header1 error\n");
+            }
+            else
+            {
+                result = FLASH_OK;
+            }
+        }
+    }
+
+    if (result == FLASH_OK)
+    {
+        if ((fmCtx.header0.headerMagic != SEGMENT_HEADER_MAGIC) && (fmCtx.header1.headerMagic != SEGMENT_HEADER_MAGIC)) {
+            resetSegments(TRUE, TRUE, SEGMENT_MAGIC_ACTIVE, SEGMENT_MAGIC_BACKUP, &result);
+        }
+        else if ((fmCtx.header0.headerMagic != SEGMENT_HEADER_MAGIC) && (fmCtx.header1.headerMagic == SEGMENT_HEADER_MAGIC)) {
+            resetSegments(TRUE, FALSE, (fmCtx.header1.statusMagic == SEGMENT_MAGIC_BACKUP) ? SEGMENT_MAGIC_ACTIVE : SEGMENT_MAGIC_BACKUP, 0, &result);
+            fmCtx.activeSegmentBaseStatus = (fmCtx.header1.statusMagic == SEGMENT_MAGIC_BACKUP) ? MAGIC_LOW_ACTIVE : MAGIC_HIGH_ACTIVE;
+        }
+        else if ((fmCtx.header0.headerMagic == SEGMENT_HEADER_MAGIC) && (fmCtx.header1.headerMagic != SEGMENT_HEADER_MAGIC)) {
+            resetSegments(FALSE, TRUE, 0, (fmCtx.header0.statusMagic == SEGMENT_MAGIC_BACKUP) ? SEGMENT_MAGIC_ACTIVE : SEGMENT_MAGIC_BACKUP, &result);
+            fmCtx.activeSegmentBaseStatus = (fmCtx.header0.statusMagic == SEGMENT_MAGIC_BACKUP) ? MAGIC_HIGH_ACTIVE : MAGIC_LOW_ACTIVE;
+        }
+        else 
+        {
+            // 根据header状态确定激活segment
+            if (fmCtx.header0.statusMagic == SEGMENT_MAGIC_ACTIVE && fmCtx.header1.statusMagic == SEGMENT_MAGIC_BACKUP)
+            {
+                // 正常情况：segment0激活，segment1备用
+                fmCtx.activeSegmentBaseStatus = MAGIC_LOW_ACTIVE;
+                UARTIF_uartPrintf(0, "flash_manager low active\n");
+                needToInitList = TRUE;
+                fmCtx.currentGcCounter = fmCtx.header0.gcCounter;
+            } 
+            else if (fmCtx.header1.statusMagic == SEGMENT_MAGIC_ACTIVE && fmCtx.header0.statusMagic == SEGMENT_MAGIC_BACKUP)
+            {
+                // segment1激活，segment0备用
+                fmCtx.activeSegmentBaseStatus = MAGIC_HIGH_ACTIVE;
+                UARTIF_uartPrintf(0, "flash_manager high active\n");
+                needToInitList = TRUE;
+                fmCtx.currentGcCounter = fmCtx.header1.gcCounter;
+            } 
+            else if (fmCtx.header1.statusMagic == SEGMENT_MAGIC_ACTIVE && fmCtx.header0.statusMagic == SEGMENT_MAGIC_ACTIVE)
+            {
+                // 垃圾回收中断，需要恢复
+                // TO DO：
+                fmCtx.gcInProgress = 1;
+                UARTIF_uartPrintf(0, "flash_manager GC redo! \n");
+                result = judgeWhichSegmentIsActive();
+                if (result != FLASH_OK) {
+                    resetSegments(TRUE, TRUE, SEGMENT_MAGIC_ACTIVE, SEGMENT_MAGIC_BACKUP, &result);
+                }
+                else
+                {
+                    needToInitList = TRUE;
+                }
+            } 
+            else
+            {
+                UARTIF_uartPrintf(0, "flash_manager start to init sg 0 else! \n");
+                // segment1激活，segment0备用
+                resetSegments(TRUE, FALSE, SEGMENT_MAGIC_ACTIVE, 0, &result);
+                UARTIF_uartPrintf(0, "flash_manager low active\n");
+            }
+        }
+    }
+
+    // 扫描激活segment构建映射表
+
+    if (result == FLASH_OK) 
+    {
+        if (needToInitList)
+        {
+            result = scanSegmentPages();
+        }
+        else 
+        {
+            if (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE)
+            {
+                fmCtx.nextWriteAddress = 0x0001;
+            }
+            else 
+            {
+                fmCtx.nextWriteAddress = 0x2001;
+            }
+            fmCtx.gcInProgress = 0;
+        }
+    }
+
+    if ((result == FLASH_OK) && (fmCtx.gcInProgress == 1))
+    {
+        result = garbageCollect();
+    }
+
+    
+    return result;
 }
 
 /**
- * @brief 获取Flash状态信息
+ * @brief 写入数据
  */
-flash_result_t flash_get_status(flash_manager_t* manager, uint32_t* used_pages, uint32_t* free_pages, uint32_t* data_count)
+flash_result_t FM_writeData(uint8_t magic, uint16_t dataId, const uint8_t* data, uint16_t size)
 {
-    if (manager == NULL) {
-        return FLASH_ERROR_INVALID_PARAM;
+    flash_result_t result = FLASH_OK;
+    uint32_t crc32;
+    uint32_t nextWriteAddress = 0;
+    // uint8_t slotId;
+
+    // 检查是否需要垃圾回收
+    result = checkArguments(magic, dataId, data, size);
+    if (result == FLASH_OK)
+    {
+        result = checkAndDoGarbageCollection();
+        nextWriteAddress |= (uint32_t) (fmCtx.nextWriteAddress << 8u);
+
+        if (fmCtx.activeSegmentBaseStatus == MAGIC_LOW_ACTIVE)
+        {
+            if (nextWriteAddress >= FLASH_SEGMENT1_BASE)
+            {
+                result = FLASH_ERROR_NO_SPACE;
+            }
+        }
+        else 
+        {
+            if (nextWriteAddress >= FLASH_TOTAL_SIZE || nextWriteAddress < FLASH_SEGMENT1_BASE)
+            {
+                result = FLASH_ERROR_NO_SPACE;
+            }
+        }
+        if (nextWriteAddress == (FLASH_SEGMENT0_BASE) || nextWriteAddress == (FLASH_SEGMENT1_BASE))
+        {
+            result = FLASH_ERROR_INVALID_PARAM;
+        }
+    }
+    else
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
+    }
+
+    if (result == FLASH_OK)
+    {
+        // 清空缓冲区
+        memset(G_buffer1, 0, FLASH_PAGE_SIZE);
+
+        // 将数据页字段复制到缓冲区
+        G_buffer1[0] = magic; // 魔法数字
+        G_buffer1[1] = (uint8_t)(dataId & 0xFF); // if image data, this byte is frameNum
+        // slotId = G_buffer1[2] = (uint8_t)((dataId >> 8) & 0xFF); // if image data, this byte is slotId
+        G_buffer1[2] = (uint8_t)((dataId >> 8) & 0xFF); // if image data, this byte is slotId
+        G_buffer1[3] = size;
+    
+        // 计算CRC32（只计算数据部分）
+        crc32 = calculate_crc32_default(data, size);
+        G_buffer1[4] = (uint8_t)(crc32 & 0xFF);
+        G_buffer1[5] = (uint8_t)((crc32 >> 8) & 0xFF);
+        G_buffer1[6] = (uint8_t)((crc32 >> 16) & 0xFF);
+        G_buffer1[7] = (uint8_t)((crc32 >> 24) & 0xFF);
+    
+        memcpy(&G_buffer1[8], data, size);
+
+        UARTIF_uartPrintf(0, "flash_manager: write data to flash nextWriteAddress is 0x%08x! \n", nextWriteAddress);
+
+        // 写入Flash
+        if (W25Q32_WritePage(nextWriteAddress, G_buffer1, FLASH_PAGE_SIZE) != 0)
+        {
+            result = FLASH_ERROR_WRITE_FAIL;
+        }
+    }
+    // 更新映射表
+    if (result == FLASH_OK)
+    {
+        if (magic == DATA_PAGE_MAGIC || magic == MAGIC_BW_IMAGE_HEADER || magic == MAGIC_RED_IMAGE_HEADER)
+        {
+            fmCtx.entries[magic & 0x03][dataId] = fmCtx.nextWriteAddress;
+        }
+        else if (magic == MAGIC_BW_IMAGE_DATA || magic == MAGIC_RED_IMAGE_DATA)
+        {
+            // do nothing, 
+        }
+        else
+        {
+            result = FLASH_ERROR_INVALID_PARAM;
+        }
+        fmCtx.nextWriteAddress++;
     }
     
-    if (used_pages != NULL) {
-        *used_pages = manager->data_count + 1; // +1 for header page
+    return result;
+}
+
+/**
+ * @brief 读取数据
+ */
+flash_result_t FM_readData(uint8_t magic, uint16_t dataId, uint8_t* data, uint8_t size)
+{
+    flash_result_t result = FLASH_OK;
+    uint32_t calculatedCrc, storedCrc;
+    uint8_t pageDataSize;
+    uint32_t destAddress = 0;
+    uint8_t readSize = size;
+    // uint8_t slotId = 0u;
+    uint8_t frameNum = 0u;
+
+    // 在映射表中查找
+    result = checkArguments(magic, dataId, data, size);
+    if (result == FLASH_OK)
+    {
+        // UARTIF_uartPrintf(0, "flash_manager: read data from flash! \n");
+        if (magic == DATA_PAGE_MAGIC || magic == MAGIC_BW_IMAGE_HEADER || magic == MAGIC_RED_IMAGE_HEADER)
+        {
+            if (fmCtx.entries[magic & 0x03][dataId] == 0xffff)
+            {
+                result = FLASH_ERROR_NOT_FOUND;
+            }
+            else
+            {
+                destAddress |= (uint32_t) (fmCtx.entries[magic & 0x03][dataId] << 8u);
+            }
+        }
+        else if (magic == MAGIC_BW_IMAGE_DATA || magic == MAGIC_RED_IMAGE_DATA)
+        {
+            // slotId = (uint8_t)((dataId & 0xff00u) >> 8u);
+            frameNum = (uint8_t)(dataId & 0xffu);
+            if (G_imageAddressBuffer[frameNum] == 0xffff)
+            {
+                result = FLASH_ERROR_NOT_FOUND;
+            }
+            else
+            {
+                destAddress |= (uint32_t) (G_imageAddressBuffer[frameNum] << 8u);
+            }
+        }
+        else
+        {
+            // do nothing
+        }
+    }
+    else
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
+    }
+
+    // 读取数据页
+    if (result == FLASH_OK)
+    {
+        memset(G_buffer1, 0, FLASH_PAGE_SIZE);
+        UARTIF_uartPrintf(0, "flash_manager: read data from flash destAddress is 0x%08x! \n", destAddress);
+        // 读取数据页到缓冲区
+        if (W25Q32_ReadData(destAddress, G_buffer1, FLASH_PAGE_SIZE) != 0) 
+        {
+            result = FLASH_ERROR_READ_FAIL;
+        }
     }
     
-    if (free_pages != NULL) {
-        *free_pages = FLASH_DATA_PAGES_PER_SEGMENT - manager->data_count;
+    if (result == FLASH_OK)
+    {
+        // 验证魔法数字
+        if (G_buffer1[0] != magic)
+        {
+            result = FLASH_ERROR_INVALID_PARAM;
+        }
     }
     
-    if (data_count != NULL) {
-        *data_count = manager->data_count;
+    // 验证CRC32（只验证数据部分）
+    if (result == FLASH_OK)
+    {
+        // 从缓冲区解析数据页字段
+        pageDataSize = G_buffer1[3];
+        storedCrc = (uint32_t)G_buffer1[4] | ((uint32_t)G_buffer1[5] << 8) | 
+                     ((uint32_t)G_buffer1[6] << 16) | ((uint32_t)G_buffer1[7] << 24);
+
+        calculatedCrc = calculate_crc32_default(&G_buffer1[8], pageDataSize);
+        if (calculatedCrc != storedCrc) 
+        {
+            result = FLASH_ERROR_CRC_FAIL;
+        }
+    }
+
+    // 检查缓冲区大小
+    if (result == FLASH_OK)
+    {
+        if (readSize > pageDataSize) 
+        {
+            readSize = pageDataSize;
+            // 复制数据
+
+            result = FLASH_ERROR_INVALID_PARAM;
+        }
+
+        memcpy(data, &G_buffer1[8], readSize);
     }
     
-    return FLASH_OK;
+    return result;
+}
+
+/**
+ * @brief 删除数据
+ */
+flash_result_t FM_deleteData(uint16_t dataId)
+{
+    flash_result_t result = FLASH_OK;
+    if (dataId >= MAX_DATA_ENTRIES)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
+    }
+
+    if (result == FLASH_OK)
+    {
+        fmCtx.dataEntries[dataId] = 0xffff;
+        fmCtx.gcInProgress = 1;
+        result = garbageCollect();
+    }
+    return result;
 }
 
 /**
  * @brief 强制执行垃圾回收
  */
-flash_result_t flash_force_garbage_collect(flash_manager_t* manager)
+flash_result_t FM_forceGarbageCollect(void)
 {
-    return flash_garbage_collect(manager);
+    return garbageCollect();
 }
 
 /**
- * @brief 写入图像数据页
+ * @brief 写入图像头页
  */
-flash_result_t flash_write_image_data_page(flash_manager_t* manager, uint8_t magic, uint16_t data_id, const uint8_t* data, uint8_t size)
+flash_result_t FM_writeImageHeader(uint8_t magic, uint8_t slotId)
 {
-    flash_result_t result;
-    uint32_t crc32;
-    uint32_t segment_end;
-    
-    if (manager == NULL || data == NULL || size == 0 || size > 247 || data_id == INVALID_DATA_ID) {
-        return FLASH_ERROR_INVALID_PARAM;
+    flash_result_t result = FLASH_OK;
+//    uint8_t i;
+
+    if (magic != MAGIC_BW_IMAGE_HEADER && magic != MAGIC_RED_IMAGE_HEADER)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
     }
-    
-    // 检查是否需要垃圾回收
-    if (manager->next_write_address == INVALID_ADDRESS) {
-        result = flash_garbage_collect(manager);
-        if (result != FLASH_OK) {
-            return result;
-        }
+
+    if (slotId >= MAX_IMAGE_ENTRIES)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
     }
-    
-    // 清空缓冲区
-    memset(g_flash_buffer, 0, FLASH_PAGE_SIZE);
-    
-    // 将数据页字段复制到缓冲区
-    g_flash_buffer[0] = magic; // 魔法数字
-    g_flash_buffer[1] = (uint8_t)(data_id & 0xFF);
-    g_flash_buffer[2] = (uint8_t)((data_id >> 8) & 0xFF);
-    g_flash_buffer[3] = size;
-    
-    // 计算CRC32（只计算数据部分）
-    crc32 = calculate_crc32_default(data, size);
-    g_flash_buffer[4] = (uint8_t)(crc32 & 0xFF);
-    g_flash_buffer[5] = (uint8_t)((crc32 >> 8) & 0xFF);
-    g_flash_buffer[6] = (uint8_t)((crc32 >> 16) & 0xFF);
-    g_flash_buffer[7] = (uint8_t)((crc32 >> 24) & 0xFF);
-    
-    memcpy(&g_flash_buffer[8], data, size);
-    
-    // 写入Flash
-    if (W25Q32_WritePage(manager->next_write_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_WRITE_FAIL;
+
+    if (result == FLASH_OK)
+    {
+        memset(G_imageAddressBuffer, 0xff, sizeof(G_imageAddressBuffer));
+        UARTIF_uartPrintf(0, "Scanning image data pages for magic %d, slot %d\n", magic, slotId);
+        result = scanImageDataPages(magic + 2u, slotId);
     }
-    
-    // 更新映射表
-    result = add_data_entry(manager, data_id, manager->next_write_address);
-    if (result != FLASH_OK) {
-        return result;
+
+    if (result == FLASH_OK)
+    {
+        // 清空缓冲区
+        memset(G_buffer2, 0, FLASH_PAGE_SIZE);
+        UARTIF_uartPrintf(0, "Writing image header for magic 0x%02x, slot %d\n", magic, slotId);
+        memcpy(G_buffer2, G_imageAddressBuffer, (MAX_FRAME_NUM + 1) * 2);
+        // for (i = 0; i < MAX_FRAME_NUM + 1; i++)
+        // {
+        //     UARTIF_uartPrintf(0, "Image %d: Block 0x%02x, Page 0x%02x\n", i, G_buffer2[2*i + 1], G_buffer2[2*i]);
+        // }
+        // 写入Flash
+        result = FM_writeData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
     }
-    
-    // 更新下次写入地址
-    manager->next_write_address += FLASH_PAGE_SIZE;
-    
-    // 检查是否到达segment末尾
-    segment_end = manager->active_segment_base + FLASH_SEGMENT_SIZE;
-    if (manager->next_write_address >= segment_end) {
-        manager->next_write_address = INVALID_ADDRESS;
+    if (result != FLASH_OK)
+    {
+        UARTIF_uartPrintf(0, "Write image header fail! error code is %d \n", result);
     }
-    
-    return FLASH_OK;
+
+    return result;
 }
 
 /**
  * @brief 读取图像数据页
  */
-flash_result_t flash_read_image_data_page(flash_manager_t* manager, uint16_t data_id, uint8_t expected_magic, uint8_t* data, uint8_t* size)
+flash_result_t FM_readImage(uint8_t magic, uint8_t slotId, uint8_t frameNum, uint8_t* data)
 {
-    int16_t index;
-    uint32_t calculated_crc, stored_crc;
-    uint8_t page_data_size;
-    
-    if (manager == NULL || data == NULL || size == NULL || data_id == INVALID_DATA_ID) {
-        return FLASH_ERROR_INVALID_PARAM;
+    static uint8_t lastMagicInBuffer = 0xff;
+    static uint8_t lastSlotIdInBuffer = 0xff;
+    flash_result_t result = FLASH_OK;
+    uint16_t dataId = 0;
+
+    if (magic != MAGIC_BW_IMAGE_DATA && magic != MAGIC_RED_IMAGE_DATA)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
     }
-    
-    // 在映射表中查找
-    index = find_data_entry(manager, data_id);
-    if (index < 0) {
-        return FLASH_ERROR_NOT_FOUND;
+    if (slotId >= MAX_IMAGE_ENTRIES || frameNum > MAX_FRAME_NUM)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
     }
-    
-    // 读取数据页到缓冲区
-    if (W25Q32_ReadData(manager->data_entries[index].page_address, g_flash_buffer, FLASH_PAGE_SIZE) != 0) {
-        return FLASH_ERROR_READ_FAIL;
+    if (data == NULL)
+    {
+        result = FLASH_ERROR_INVALID_PARAM;
     }
-    
-    // 验证魔法数字
-    if (g_flash_buffer[0] != expected_magic) {
-        return FLASH_ERROR_INVALID_PARAM;
+
+    if (result == FLASH_OK)
+    {
+        if (magic != lastMagicInBuffer || slotId != lastSlotIdInBuffer)
+        {
+            memset(G_imageAddressBuffer, 0xff, sizeof(G_imageAddressBuffer));
+            if (fmCtx.entries[(magic - 2u) & 0x03][slotId] == 0xffff)
+            {
+                result = FLASH_ERROR_NOT_FOUND;
+            }
+            else
+            {
+                result = readImageHeaderIntoBuffer((magic - 2u), slotId);
+            }
+            if (result == FLASH_OK)
+            {
+                lastMagicInBuffer = magic;
+                lastSlotIdInBuffer = slotId;
+            }
+        }
     }
-    
-    // 从缓冲区解析数据页字段
-    page_data_size = g_flash_buffer[3];
-    stored_crc = (uint32_t)g_flash_buffer[4] | ((uint32_t)g_flash_buffer[5] << 8) | 
-                 ((uint32_t)g_flash_buffer[6] << 16) | ((uint32_t)g_flash_buffer[7] << 24);
-    
-    // 验证CRC32（只验证数据部分）
-    calculated_crc = calculate_crc32_default(&g_flash_buffer[8], page_data_size);
-    if (calculated_crc != stored_crc) {
-        return FLASH_ERROR_CRC_FAIL;
+
+    if (result == FLASH_OK)
+    {
+        dataId = (uint16_t)slotId;
+        dataId = dataId << 8u;
+        dataId |= (uint16_t)frameNum;
+        result = FM_readData(magic, dataId, data, PAYLOAD_SIZE);
     }
-    
-    // 检查缓冲区大小
-    if (*size < page_data_size) {
-        *size = page_data_size;
-        return FLASH_ERROR_INVALID_PARAM;
-    }
-    
-    // 复制数据
-    memcpy(data, &g_flash_buffer[8], page_data_size);
-    *size = page_data_size;
-    
-    return FLASH_OK;
+
+    return result;
 }

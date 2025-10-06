@@ -18,6 +18,7 @@ const crc32_config_t CRC32_IEEE = {
  * @return uint32_t CRC32值
  */
 uint32_t calculate_crc32(const uint8_t* data, uint32_t length, const crc32_config_t* config)
+// uint32_t calculate_crc32(uint8_t* data, uint32_t length, const crc32_config_t* config)
 {
     uint32_t crc;
     uint32_t i, j;
@@ -56,6 +57,7 @@ uint32_t calculate_crc32(const uint8_t* data, uint32_t length, const crc32_confi
  * @param length 数据长度
  * @return uint32_t CRC32值
  */
+// uint32_t calculate_crc32_default(uint8_t* data, uint32_t length)
 uint32_t calculate_crc32_default(const uint8_t* data, uint32_t length)
 {
     return calculate_crc32(data, length, NULL);

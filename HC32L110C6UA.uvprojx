@@ -159,21 +159,21 @@
             <ldmm>1</ldmm>
             <ldXref>1</ldXref>
             <BigEnd>0</BigEnd>
-            <AdsALst>0</AdsALst>
-            <AdsACrf>0</AdsACrf>
+            <AdsALst>1</AdsALst>
+            <AdsACrf>1</AdsACrf>
             <AdsANop>0</AdsANop>
             <AdsANot>0</AdsANot>
             <AdsLLst>1</AdsLLst>
             <AdsLmap>1</AdsLmap>
             <AdsLcgr>0</AdsLcgr>
-            <AdsLsym>0</AdsLsym>
+            <AdsLsym>1</AdsLsym>
             <AdsLszi>0</AdsLszi>
             <AdsLtoi>0</AdsLtoi>
             <AdsLsun>0</AdsLsun>
             <AdsLven>0</AdsLven>
             <AdsLsxf>0</AdsLsxf>
-            <RvctClst>0</RvctClst>
-            <GenPPlst>0</GenPPlst>
+            <RvctClst>1</RvctClst>
+            <GenPPlst>1</GenPPlst>
             <AdsCpuType>"Cortex-M0+"</AdsCpuType>
             <RvctDeviceName></RvctDeviceName>
             <mOS>0</mOS>
@@ -461,11 +461,6 @@
               <FilePath>.\source\epd.c</FilePath>
             </File>
             <File>
-              <FileName>draw.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\source\draw.c</FilePath>
-            </File>
-            <File>
               <FileName>queue.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\source\queue.c</FilePath>
@@ -486,29 +481,19 @@
               <FilePath>.\source\w25q32.c</FilePath>
             </File>
             <File>
+              <FileName>crc_utils.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\source\crc_utils.c</FilePath>
+            </File>
+            <File>
               <FileName>flash_manager.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\source\flash_manager.c</FilePath>
             </File>
             <File>
-              <FileName>global_buffers.c</FileName>
+              <FileName>drawWithFlash.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\source\global_buffers.c</FilePath>
-            </File>
-            <File>
-              <FileName>image_display_new.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\source\image_display_new.c</FilePath>
-            </File>
-            <File>
-              <FileName>image_transfer_manager.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\source\image_transfer_manager.c</FilePath>
-            </File>
-            <File>
-              <FileName>crc_utils.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>.\source\crc_utils.c</FilePath>
+              <FilePath>.\source\drawWithFlash.c</FilePath>
             </File>
           </Files>
         </Group>

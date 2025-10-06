@@ -21,9 +21,9 @@
  * Include files
  ******************************************************************************/
 #include <stdio.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <string.h>
+// #include <stdarg.h>
+// #include <stdint.h>
+// #include <string.h>
 
 #include "hc32l110.h"
 #include "ddl.h"
@@ -33,19 +33,18 @@
 #include "clk.h"
 #include "waveinit.h"
 #include "epd.h"
-#include "draw.h"
+#include "drawWithFlash.h"
 #include "lpuart.h"
 #include "queue.h"
 #include "uart_interface.h"
 #include "e104.h"
+#include "image.h"
 #include "lpt.h"
 #include "lpm.h"
 #include "w25q32.h"
 #include "flash_manager.h"
-#include "image_transfer_manager.h"
-#include "image_display_new.h"
-#include "global_buffers.h"
-// #include "flash_test.h"
+// #include "testCase.h"
+#include <stdlib.h>
 
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                            
@@ -74,12 +73,6 @@ static volatile boolean_t tg8s = FALSE;
 // static volatile boolean_t tg2s = FALSE;
 //static float temperature = 0.0, humidity = 0.0;
 //static boolean_t linkFlag = FALSE;
-flash_manager_t g_flash_manager;
-static image_transfer_manager_t g_image_transfer_manager;
-static image_display_new_t g_image_display;
-static uint8_t read_buffer[64];
-static uint8_t test_data[] = "Hello Flash Manager!";
-extern Queue lpUartRecdata;
 
 /******************************************************************************
  * Local pre-processor symbols/macros ('#define')                             
@@ -116,9 +109,6 @@ void Bt0Int(void)
     {
         tg1 = TRUE;
     }
-    
-    // 调用图像传输超时处理函数（5ms间隔）
-    image_transfer_timeout_handler();
 }
 
 void LptInt(void)
@@ -165,6 +155,23 @@ void LptInt(void)
 //   return crc;
 //}
 
+
+//static float temperatureConvert(uint32_t d0, uint32_t d1, uint32_t d2)
+//{
+//   float result = 0.0;
+//   uint32_t data = (d2 | (d1 << 8) | (((d0 & 0x0000000f)) << 16));
+//   result = (data / 1048576.0)*200.0 - 50.0;
+//   return result;
+//}
+
+//static float humidityConvert(uint32_t d0, uint32_t d1, uint32_t d2)
+//{
+//   float result = 0.0;
+//   uint32_t data = (((d2 & 0x000000f0) >> 4) | (d1 << 4) | (d0 << 12));
+//   result = (data / 1048576.0)*100.0;
+//   return result;
+//}
+
 static void timInit(void)
 {
     stc_bt_config_t   stcConfig;
@@ -194,47 +201,45 @@ static void timInit(void)
 
 }
 
-static void lpmInit(void)
-{
-    stc_lpt_config_t stcConfig;
-    stc_lpm_config_t stcLpmCfg;
-    uint16_t         u16ArrData;
-    
-    u16ArrData = 0;
+//static void lpmInit(void)
+//{
+//    stc_lpt_config_t stcConfig;
+//    stc_lpm_config_t stcLpmCfg;
+//    uint16_t         u16ArrData = 0;
 
-    Clk_Enable(ClkRCL, TRUE);
-    //使能Lpt、GPIO外设时钟
-    Clk_SetPeripheralGate(ClkPeripheralLpTim, TRUE);
+//    Clk_Enable(ClkRCL, TRUE);
+//    //使能Lpt、GPIO外设时钟
+//    Clk_SetPeripheralGate(ClkPeripheralLpTim, TRUE);
 
-    stcConfig.enGateP  = LptPositive;
-    stcConfig.enGate   = LptGateDisable;
-    stcConfig.enTckSel = LptIRC32K;
-    stcConfig.enTog    = LptTogDisable;
-    stcConfig.enCT     = LptTimer;
-    stcConfig.enMD     = LptMode2;
-    
-    stcConfig.pfnLpTimCb = LptInt;
-    Lpt_Init(&stcConfig);
-    //Lpm Cfg
-    stcLpmCfg.enSEVONPEND   = SevPndDisable;
-    stcLpmCfg.enSLEEPDEEP   = SlpDpEnable;
-    stcLpmCfg.enSLEEPONEXIT = SlpExtDisable;
-    Lpm_Config(&stcLpmCfg);
-    
-    //Lpt 中断使能
-    Lpt_ClearIntFlag();
-    Lpt_EnableIrq();
-    EnableNvic(LPTIM_IRQn, 0, TRUE);
-    
-    
-    //设置重载值，计数初值，启动计数
-    Lpt_ARRSet(u16ArrData);
-    Lpt_Run();
+//    stcConfig.enGateP  = LptPositive;
+//    stcConfig.enGate   = LptGateDisable;
+//    stcConfig.enTckSel = LptIRC32K;
+//    stcConfig.enTog    = LptTogDisable;
+//    stcConfig.enCT     = LptTimer;
+//    stcConfig.enMD     = LptMode2;
+//    
+//    stcConfig.pfnLpTimCb = LptInt;
+//    Lpt_Init(&stcConfig);
+//    //Lpm Cfg
+//    stcLpmCfg.enSEVONPEND   = SevPndDisable;
+//    stcLpmCfg.enSLEEPDEEP   = SlpDpEnable;
+//    stcLpmCfg.enSLEEPONEXIT = SlpExtDisable;
+//    Lpm_Config(&stcLpmCfg);
+//    
+//    //Lpt 中断使能
+//    Lpt_ClearIntFlag();
+//    Lpt_EnableIrq();
+//    EnableNvic(LPTIM_IRQn, 0, TRUE);
+//    
+//    
+//    //设置重载值，计数初值，启动计数
+//    Lpt_ARRSet(u16ArrData);
+//    Lpt_Run();
 
-    // 进入低功耗模式……
-    Lpm_GotoLpmMode(); 
+//    // 进入低功耗模式……
+//    Lpm_GotoLpmMode(); 
 
-}
+//}
 
 //static void task3(void)
 //{
@@ -248,13 +253,13 @@ static void lpmInit(void)
 //    }
 //}
 
-// static void task1(void)
-// {
-//     DRAW_initScreen();
-//     DRAW_DisplayTempHumiRot(temperature,humidity,linkFlag);
+//static void task1(void)
+//{
+//    DRAW_initScreen();
+//    DRAW_DisplayTempHumiRot(temperature,humidity,linkFlag);
 
-//     DRAW_outputScreen();
-// }
+//    DRAW_outputScreen();
+//}
 
 //static void task0(void)
 //{
@@ -286,63 +291,64 @@ static void lpmInit(void)
 //    }
 //}
 
-static void handleClearEpdEvent(void)
-{
-    typedef enum 
-    {
-        STATE_IDLE,     // 空闲状态
-        STATE_WAITING_3_4,  // 等待第三次唤醒
-        STATE_WAITING_4,  // 等待第四次唤醒
-    } State;
+//static void handleClearEpdEvent(void)
+//{
+//    typedef enum 
+//    {
+//        STATE_IDLE,     // 空闲状态
+//        STATE_WAITING_3_4,  // 等待第三次唤醒
+//        STATE_WAITING_4,  // 等待第四次唤醒
+//    } State;
 
-    static State currentState = STATE_IDLE;
-    static uint8_t counter = 0;
-    // static boolean_t firstflag = TRUE;
+//    static State currentState = STATE_IDLE;
+//    static uint8_t counter = 0;
+//    // static boolean_t firstflag = TRUE;
 
-    switch (currentState)
-    {
-        case STATE_IDLE:
-            if (counter > 40 && tg8s)
-            {
-                currentState = STATE_WAITING_3_4;
-                counter = 0;
-            }
-            else
-            {
-                counter++; 
-            }
-            break;
-        case STATE_WAITING_3_4:
-            if (counter < 2)
-            {
-                counter++;
-            }
-            else
-            {
-                EPD_poweroff();
-                delay1ms(10);
-                EPD_initWft0154cz17(TRUE);
-                currentState = STATE_WAITING_4;
-                counter = 0;
-            }
-            break;
-        case STATE_WAITING_4:
-            if (counter < 3)
-            {
-                counter++;
-            }
-            else
-            {
-                EPD_initWft0154cz17(FALSE);
-                currentState = STATE_IDLE;
-                counter = 0;
-            }
-            break;
-        default:
-            break;
-    }
-    // UARTIF_uartPrintf(0, "State is %d, counter is %d.\n",currentState,counter);
-}
+//    switch (currentState)
+//    {
+//        case STATE_IDLE:
+//            if (counter > 40 && tg8s)
+//            {
+//                currentState = STATE_WAITING_3_4;
+//                counter = 0;
+//            }
+//            else
+//            {
+//                counter++; 
+//            }
+//            break;
+//        case STATE_WAITING_3_4:
+//            if (counter < 2)
+//            {
+//                counter++;
+//            }
+//            else
+//            {
+//                EPD_poweroff();
+//                delay1ms(10);
+//                EPD_initWft0154cz17(TRUE);
+//                currentState = STATE_WAITING_4;
+//                counter = 0;
+//            }
+//            break;
+//        case STATE_WAITING_4:
+//            if (counter < 3)
+//            {
+//                counter++;
+//            }
+//            else
+//            {
+//                EPD_initWft0154cz17(FALSE);
+//                currentState = STATE_IDLE;
+//                counter = 0;
+//            }
+//            break;
+//        default:
+//            break;
+//    }
+//    // UARTIF_uartPrintf(0, "State is %d, counter is %d.\n",currentState,counter);
+//}
+
 
 /**
  ******************************************************************************
@@ -356,16 +362,9 @@ int32_t main(void)
 //    uint8_t data = 0;
 //   uint8_t crc = 0;
 //    boolean_t trig1s = FALSE;
-	flash_result_t result;
-    uint32_t chipId;
-//   uint16_t i;
-    uint16_t read_size;
-	 uint32_t used_pages, free_pages, data_count;
-    
-    result = FLASH_OK;
-    chipId = 0;
-//    i = 0;
-    read_size = sizeof(read_buffer);
+    uint32_t chipId = 0;
+//   uint8_t sts = 0;
+//flash_result_t result = FLASH_OK;
     UARTIF_uartInit();
     // i2cInit();
     UARTIF_lpuartInit();
@@ -375,7 +374,7 @@ int32_t main(void)
     E104_setSleepMode();
 
     timInit();
-    // EPD_initWft0154cz17(TRUE);
+
     EPD_initGDEY042Z98();
     
     UARTIF_uartPrintf(0, "Done! \n");
@@ -384,185 +383,125 @@ int32_t main(void)
     delay1ms(100);
     UARTIF_uartPrintf(0, "Chip id is 0x%x ! \n", chipId);
     delay1ms(100);
-    
-    // 初始化Flash管理器
-    UARTIF_uartPrintf(0, "Initializing Flash Manager...\n");
-    result = flash_manager_init(&g_flash_manager);
-    
-    // 初始化图像传输管理器
-    if (result == FLASH_OK) {
-        result = image_transfer_init(&g_image_transfer_manager, &g_flash_manager, &lpUartRecdata);
-        if (result == FLASH_OK) {
-            UARTIF_uartPrintf(0, "Image Transfer Manager initialized!\n");
-        } else {
-            UARTIF_uartPrintf(0, "Failed to initialize Image Transfer Manager: %d\n", result);
-        }
-        
-        // 初始化图像显示器
-        result = image_display_new_init(&g_image_display, &g_flash_manager);
-        if (result == FLASH_OK) {
-            UARTIF_uartPrintf(0, "Image Display initialized!\n");
-        } else {
-            UARTIF_uartPrintf(0, "Failed to initialize Image Display: %d\n", result);
-        }
-    }
-    if (result == FLASH_OK) {
-        UARTIF_uartPrintf(0, "Flash Manager initialized successfully!\n");
-        
-        // 获取Flash状态
 
-        flash_get_status(&g_flash_manager, &used_pages, &free_pages, &data_count);
-        UARTIF_uartPrintf(0, "Flash Status: Used=%d, Free=%d, Data=%d\n", used_pages, free_pages, data_count);
-        
-        // 测试写入数据
-
-        result = flash_write_data(&g_flash_manager, 0x1001, test_data, (uint8_t)sizeof(test_data));
-        if (result == FLASH_OK) {
-            UARTIF_uartPrintf(0, "Test data written successfully!\n");
-            
-            // 测试读取数据
-            
-            result = flash_read_data(&g_flash_manager, 0x1001, read_buffer, &read_size);
-            if (result == FLASH_OK) {
-                UARTIF_uartPrintf(0, "Test data read successfully: %s\n", read_buffer);
-            } else {
-                UARTIF_uartPrintf(0, "Failed to read test data: %d\n", result);
-            }
-        } else {
-             UARTIF_uartPrintf(0, "Failed to write test data: %d\n", result);
-         }
-         
-         // 运行详细测试
-        //  flash_manager_test();
-         
-        //  // 运行垃圾回收测试
-        //  flash_gc_test();
-         
-     } else {
-         UARTIF_uartPrintf(0, "Failed to initialize Flash Manager: %d\n", result);
-     }
-
-    // sts = W25Q32_ReadStatusReg();
-    // UARTIF_uartPrintf(0, "Status Reg is 0x%x ! \n", sts);
-    // UARTIF_uartPrintf(0, "Write Enable ! \n");
-    // W25Q32_WriteEnable();
-    // delay1ms(100);
-    // UARTIF_uartPrintf(0, "Erase page 0!\n");
-    // W25Q32_EraseSector(0x000000);
-    // do 
-    // {
-    //     sts = W25Q32_ReadStatusReg();
-    //     UARTIF_uartPrintf(0, "Status Reg is 0x%x ! \n", sts);
-    //     delay1ms(300);
-    // }
-    // while(sts & 0x01);
 
     // 擦除第0扇区 (地址0x000000)
-//    W25Q32_EraseSector(0x000000);  
+    // 使用  0x20 擦除sector的时候，擦除的地址类似0x003000，最后三位没用
+//    W25Q32_EraseSector(FLASH_SEGMENT0_BASE);
+//    W25Q32_EraseSector(FLASH_SEGMENT1_BASE);
+
+        // W25Q32_EraseChip();
+// UARTIF_uartPrintf(0, "Start erase block 0!\n");
+    //  W25Q32_Erase64k(0x000000);
+// UARTIF_uartPrintf(0, "Start erase block 4!\n");
+    // W25Q32_Erase64k(0x040000);
 
    // 写入一页数据
-//    UARTIF_uartPrintf(0, "Write page 0 as 0xAA! \n");
+//    UARTIF_uartPrintf(0, "Start write block test!\n");
+//    writeBlockTest();
+//     delay1ms(500);
+//    UARTIF_uartPrintf(0, "Start read block test!\n");
+//    readBlockTest();
 
-//    memset(buffer, 0xAA, 256);  // 填充测试数据
+//    for (i = 0;i<0x3f;i++)
+//    {
+//       UARTIF_uartPrintf(0, "Start write block test at blockAddress 0x%x!!\n",i);
+//       writeBlockTest(i);
 
+//    }
+    delay1ms(500);
+//     for (i = 0;i<0x1f;i++)
+//    {
+//       UARTIF_uartPrintf(0, "Start read block test at blockAddress 0x%x!!\n",i);
+//       readBlockTest(i);
+
+//    }
+
+//    UARTIF_uartPrintf(0, "Write page 0 as 0x77! \n");
+//    memset(buffer, 0x77, 256);  // 填充测试数据
 //    W25Q32_WritePage(0x000000, buffer, 256);
-//     do 
-//     {
-//         sts = W25Q32_ReadStatusReg();
-//         UARTIF_uartPrintf(0, "Status Reg is 0x%x ! \n", sts);
-//         delay1ms(300);
-//     }
-//     while(sts & 0x01);
 
-//    // 读取验证
-//   UARTIF_uartPrintf(0, "Read page 0! \n");
-//   memset(buffer, 0, 256);
-//   W25Q32_ReadData(0x000000, buffer, 256);
-//   delay1ms(100);
-//   for (;i<256;i++)
-//   {
-//       UARTIF_uartPrintf(0, "Byte %d is 0x%x! \n", i,buffer[i]);
-//       delay1ms(1);
-//   }
 
-	UARTIF_uartPrintf(0, "Goto while ! \n");
+//    UARTIF_uartPrintf(0, "Write page 1 as 0x55! \n");
+//    memset(buffer, 0x55, 256);  // 填充测试数据
+//    W25Q32_WritePage(0x000100, buffer, 256);
+
+
+
+    //    EPD_WhiteScreenGDEY042Z98UsingFlashDate();
+
+    // testReadRawData();
+    // testReadRawDataByAddress(0x00003e00);
+    if (FM_init() == FLASH_OK) 
+    {
+        UARTIF_uartPrintf(0, "flash_manager init completely!\n");
+    }
+    // testFlashManagerReadAndWrite();
+    // testFlashManagerReadAndWrite();
+    // FM_forceGarbageCollect();
+    // testFlashManagerRead();
+    // testFlashManagerGarbageCollection();
+    // testFlashManagerReadAndWrite2();
+    // testFlashManagerRead2();
+    // testWriteImage();
+    // testWriteImageOnePage(0x09, 0xEA);
+    // testWriteImageOnePage(0x16, 0xEB);
+    // testWriteImageOnePage(0x23, 0xEC);
+    // testWriteImageOnePage(0x30, 0xED);
+
+    // testFlashManagerRead2();
+    // result = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0x01);
+
+    // if (result == FLASH_OK)
+    // {
+    //     UARTIF_uartPrintf(0, "Write image header success! \n");
+    // }
+    // else
+    // {
+    //     UARTIF_uartPrintf(0, "Write image header fail! error code is %d \n", result);
+    // }
+    // testReadImage();
+
+    // testWriteImage4();
+    // testReadImage4();
+
+    // TEST_WriteImage();
+    // DRAW_initScreen(IMAGE_BW, 0);
+
+    // DRAW_string(IMAGE_BW, 0, 10, 10, "Hello World", 3, BLACK);
+    // (void)FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
+
+    // EPD_WhiteScreenGDEY042Z98UsingFlashDate(IMAGE_BW,0);
+    // DRAW_initScreen(IMAGE_RED, 0);
+
+    // DRAW_string(IMAGE_RED, 0, 10, 100, "Completely", 7, RED);
+    // (void)FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, 0);
+
+    EPD_WhiteScreenGDEY042Z98UsingFlashDate(IMAGE_BW_AND_RED,0);
+
+    UARTIF_uartPrintf(0, "Goto while ! \n");
+
 
     while(1)
     {
-        // 处理图像传输
-        image_transfer_process(&g_image_transfer_manager);
-        
-        // 检查传输状态
-        if (g_image_transfer_manager.context.state == IMG_TRANSFER_COMPLETE) {
-            UARTIF_uartPrintf(0, "Image transfer completed! Slot=%d\n", 
-                             g_image_transfer_manager.context.current_slot);
-            
-            // 自动显示接收到的图像
-            if (g_image_display.state == DISPLAY_STATE_IDLE) {
-                image_display_new_show(&g_image_display, g_image_transfer_manager.context.current_slot);
-            }
-            
-            image_transfer_reset(&g_image_transfer_manager);
-        }
-        
-        // 处理图像显示
-        image_display_new_process(&g_image_display);
-        
-        // 检查显示状态
-        if (g_image_display.state == DISPLAY_STATE_COMPLETE) {
-            UARTIF_uartPrintf(0, "Image display completed!\n");
-            image_display_new_reset(&g_image_display);
-        } else if (g_image_display.state == DISPLAY_STATE_ERROR) {
-            UARTIF_uartPrintf(0, "Image display error! Resetting...\n");
-            image_display_new_reset(&g_image_display);
-        }
-        
-        // Gpio_SetIO(0, 1, 1);               //DC输出高
-        // Gpio_SetIO(0, 3, 1);               //RST输出高
-        // Gpio_SetIO(0, 2, 1);               //RST输出高
-        // Gpio_SetIO(1, 4, 1);               //DC输出高
-        // Gpio_SetIO(1, 5, 1);               //DC输出高
-        // Gpio_SetIO(2, 3, 1);               //DC输出高
-        // Gpio_SetIO(2, 4, 1);               //RST输出
-        // delay1ms(3000);
-        //     UARTIF_uartPrintf(0, "Low! \n");
 
-        // Gpio_SetIO(0, 1, 0);               //DC输出高
-        // Gpio_SetIO(0, 3, 0);               //RST输出高
-        // Gpio_SetIO(0, 2, 0);               //RST输出高
-        // Gpio_SetIO(1, 4, 0);               //DC输出高
-        // Gpio_SetIO(1, 5, 0);               //DC输出高
-        // Gpio_SetIO(2, 3, 0);               //DC输出高
-        // Gpio_SetIO(2, 4, 0);               //RST输出
-        // delay1ms(3000);
-        //     UARTIF_uartPrintf(0, "High! \n");
+        // EPD_WhiteScreenGDEY042Z98UsingFlashDate(0x000000);
+        // UARTIF_uartPrintf(0, "P1! \n");
+        // delay1ms(10000);
 
-        // task3();
-    //    EPD_WhiteScreenGDEY042Z98ALLBlack();
-    //    UARTIF_uartPrintf(0, "P1! \n");
-    //    delay1ms(10000);
-    //    EPD_WhiteScreenGDEY042Z98ALLWrite();
-    //    UARTIF_uartPrintf(0, "P2! \n");
-    //    delay1ms(10000);
-    //    EPD_WhiteScreenGDEY042Z98ALLRed();
-    //    UARTIF_uartPrintf(0, "P3! \n");
-    //    delay1ms(10000);
+        // EPD_WhiteScreenGDEY042Z98ALLWrite();
+        // delay1ms(10000);
 
-        // if (wakeup)
-        // {
-        //     wakeup = FALSE;
-        //     task0();
-        //     // UARTIF_uartPrintf(0, "Wake up! \n");
-        //     // handleClearEpdEvent();
-        //     if (tg8s)
-        //     {
-        //         tg8s = FALSE;
-        //         task1();
-        //         // UARTIF_uartPrintf(0, "tg8s! \n");
-        //     }
-        //     Lpm_GotoLpmMode(); 
-        // }
+        // EPD_WhiteScreenGDEY042Z98UsingFlashDate(0x000100);
+        // UARTIF_uartPrintf(0, "P2! \n");
+        // delay1ms(10000);
+
+        // EPD_WhiteScreenGDEY042Z98ALLWrite();
+        // delay1ms(10000);
+
     }
+
+
 }
 
 /******************************************************************************

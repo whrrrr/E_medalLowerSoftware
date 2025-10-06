@@ -17,7 +17,12 @@
 #define W25Q32_CMD_PAGE_PROGRAM     0x02
 #define W25Q32_CMD_SECTOR_ERASE     0x20
 #define W25Q32_CMD_CHIP_ERASE       0xC7
+#define W25Q32_CMD_32K_BLOCK_ERASE  0x52
+#define W25Q32_CMD_64K_BLOCK_ERASE  0xD8
 #define W25Q32_CMD_READ_STATUS_REG1 0x05
+#define W25Q32_CMD_READ_STATUS_REG2 0x35
+#define W25Q32_CMD_READ_STATUS_REG3 0x15
+
 #define W25Q32_CMD_WRITE_ENABLE     0x06
 #define W25Q32_CMD_WRITE_DISABLE    0x04
 
@@ -30,15 +35,19 @@
 #define W25Q32_TOTAL_SIZE        4194304 // 总容量 (4MB)
 
 /* 函数声明 */
-uint8_t W25Q32_Init(void);
+void W25Q32_Init(void);
 void W25Q32_CS(uint8_t state);  // 片选控制
 uint8_t W25Q32_ReadStatusReg(void);
-uint8_t W25Q32_WriteEnable(void);
-uint8_t W25Q32_WaitForReady(void);
+uint8_t W25Q32_ReadStatusReg2(void);
+uint8_t W25Q32_ReadStatusReg3(void);
+void W25Q32_WriteEnable(void);
+void W25Q32_WaitForReady(void);
 uint32_t W25Q32_ReadID(void);
-uint8_t W25Q32_EraseSector(uint32_t sectorAddr);
-uint8_t W25Q32_EraseChip(void);
+void W25Q32_EraseSector(uint32_t sectorAddr);
+void W25Q32_EraseChip(void);
 uint8_t W25Q32_ReadData(uint32_t addr, uint8_t *buf, uint32_t len);
 uint8_t W25Q32_WritePage(uint32_t addr, uint8_t *buf, uint16_t len);
-
+void W25Q32_Erase32k(uint32_t addr);
+void W25Q32_Erase64k(uint32_t addr);
+uint8_t W25Q32_memset(void *s, int c, size_t n);
 #endif
