@@ -321,6 +321,21 @@ uint8_t UARTIF_passThroughCmd(void)
     return tcmd;
 }
 
+uint16_t UARTIF_fetchDataFromUart(uint8_t *buf, uint16_t *idx)
+{
+    uint8_t byte;
+    uint16_t cnt = 0;
+    if (idx == NULL) return 0;
+    if (buf == NULL) return 0;
+
+    while (!Queue_IsEmpty(&uartRecdata))
+    {
+        Queue_Dequeue(&uartRecdata, &byte);
+        buf[(*idx)++] = byte;
+        cnt++;
+    }
+    return cnt;
+}
 
 /******************************************************************************
  * EOF (not truncated)

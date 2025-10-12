@@ -43,6 +43,7 @@
 #include "lpm.h"
 #include "w25q32.h"
 #include "flash_manager.h"
+#include "image_transfer.h"
 // #include "testCase.h"
 #include <stdlib.h>
 
@@ -68,6 +69,7 @@
 // static uint8_t uart1RxFlg = 0;
 static volatile uint16_t timer0 = 0;
 static volatile boolean_t tg1 = FALSE;
+static volatile boolean_t tg5ms = FALSE;  // 5ms task flag for image transfer
 static volatile boolean_t wakeup = FALSE;
 static volatile boolean_t tg8s = FALSE;
 // static volatile boolean_t tg2s = FALSE;
@@ -96,6 +98,10 @@ void Bt0Int(void)
         Bt_ClearIntFlag(TIM0);
     // }
     // timer0++;
+
+    // 每5ms设置image transfer任务flag
+    tg5ms = TRUE;
+
     if (timer0 < 199)  // 1s
     {
         timer0++;
@@ -432,10 +438,14 @@ int32_t main(void)
 
     // testReadRawData();
     // testReadRawDataByAddress(0x00003e00);
-    if (FM_init() == FLASH_OK) 
+    if (FM_init() == FLASH_OK)
     {
         UARTIF_uartPrintf(0, "flash_manager init completely!\n");
     }
+
+    // 初始化image transfer模块
+    ImageTransfer_Init();
+    UARTIF_uartPrintf(0, "image_transfer init completely!\n");
     // testFlashManagerReadAndWrite();
     // testFlashManagerReadAndWrite();
     // FM_forceGarbageCollect();
@@ -484,6 +494,12 @@ int32_t main(void)
 
     while(1)
     {
+        // 5ms task: image transfer processing
+        if (tg5ms)
+        {
+            tg5ms = FALSE;
+            ImageTransfer_Process();
+        }
 
         // EPD_WhiteScreenGDEY042Z98UsingFlashDate(0x000000);
         // UARTIF_uartPrintf(0, "P1! \n");

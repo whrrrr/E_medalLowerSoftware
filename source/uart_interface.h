@@ -9,6 +9,7 @@ void UARTIF_uartInit(void);
 void UARTIF_lpuartInit(void);
 void UARTIF_passThrough(void);
 uint8_t UARTIF_passThroughCmd(void);
+uint16_t UARTIF_fetchDataFromUart(uint8_t *buf, uint16_t *idx);
 
 
 #endif // UART_INTERFACE_H

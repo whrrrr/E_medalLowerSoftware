@@ -495,6 +495,11 @@
               <FileType>1</FileType>
               <FilePath>.\source\drawWithFlash.c</FilePath>
             </File>
+            <File>
+              <FileName>image_transfer.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\source\image_transfer.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

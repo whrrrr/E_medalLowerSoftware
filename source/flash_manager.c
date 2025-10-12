@@ -38,7 +38,7 @@ static uint8_t G_buffer1[FLASH_PAGE_SIZE] = {0};
 static uint8_t G_buffer2[FLASH_PAGE_SIZE] = {0};
 
 static uint16_t G_imageAddressBuffer[MAX_FRAME_NUM + 1u];
-// static uint64_t frameIsFull = 0x00;
+
 /*****************************************************************************
  * Function implementation - local ('static')
  ******************************************************************************/
