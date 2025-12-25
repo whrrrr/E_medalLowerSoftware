@@ -144,13 +144,17 @@ static uint16_t crc16_ccitt_sw(const uint8_t *data, uint32_t len)
  * 校验通过则将该 page 写入 slot 的第 0 页，其余页写白色，并刷新电子纸显示。
  * 输入要求：buf 长度应 >= PAGE_SIZE + 2。
  */
-void DRAW_testWriteFirstPage(imageType_t type, uint8_t slot, const uint8_t *buf, uint32_t len)
+/**
+ * 写入一页数据到指定的 flash page（不刷新显示）
+ * 注意：len 应 >= PAGE_SIZE + 2（PAGE_SIZE 字节数据 + 2 字节 CRC）
+ */
+void DRAW_testWritePage(imageType_t type, uint8_t slot, uint16_t pageIndex, const uint8_t *buf, uint32_t len)
 {
     uint16_t id;
     flash_result_t res;
     uint32_t i;
-	  uint16_t recv_crc;
-	  uint16_t calc;
+    uint16_t recv_crc;
+    uint16_t calc;
 
     if (buf == NULL || len < (PAGE_SIZE + 2)) {
         UARTIF_uartPrintf(0, "TEST: input too short len=%lu\r\n", (unsigned long)len);
@@ -171,35 +175,15 @@ void DRAW_testWriteFirstPage(imageType_t type, uint8_t slot, const uint8_t *buf,
         return;
     }
 
-    /* 写第0页为接收的数据 */
-    id = 0 | (slot << 8);
+    /* 写入指定 pageIndex（只写本页，不触发刷新，也不清空其它页） */
+    id = (uint16_t)(pageIndex | (slot << 8));
     res = FM_writeData((type == IMAGE_BW) ? MAGIC_BW_IMAGE_DATA : MAGIC_RED_IMAGE_DATA, id, pageBuffer, PAGE_SIZE);
     if (res != FLASH_OK) {
-        UARTIF_uartPrintf(0, "TEST: write page0 fail id=0x%04X err=%d\r\n", id, res);
+        UARTIF_uartPrintf(0, "TEST: write page fail id=0x%04X err=%d\r\n", id, res);
         return;
     }
 
-    /* 其余页写白色（0xFF） */
-    memset(pageBuffer, 0xFF, PAGE_SIZE);
-    for (i = 1; i <= MAX_FRAME_NUM; ++i) {
-        id = (uint16_t)(i | (slot << 8));
-        res = FM_writeData((type == IMAGE_BW) ? MAGIC_BW_IMAGE_DATA : MAGIC_RED_IMAGE_DATA, id, pageBuffer, PAGE_SIZE);
-        if (res != FLASH_OK) {
-            UARTIF_uartPrintf(0, "TEST: write page %lu fail id=0x%04X err=%d\r\n", (unsigned long)i, id, res);
-            return;
-        }
-    }
-
-    /* 写 header 并刷新显示 */
-    res = FM_writeImageHeader((type == IMAGE_BW) ? MAGIC_BW_IMAGE_HEADER : MAGIC_RED_IMAGE_HEADER, slot);
-    if (res != FLASH_OK) {
-        UARTIF_uartPrintf(0, "TEST: write header fail err=%d\r\n", res);
-        return;
-    }
-
-    UARTIF_uartPrintf(0, "TEST: page0 written and others white, refreshing EPD...\r\n");
-    EPD_WhiteScreenGDEY042Z98UsingFlashDate(type, slot);
-    UARTIF_uartPrintf(0, "TEST: refresh done\r\n");
+    UARTIF_uartPrintf(0, "TEST: write page %u ok id=0x%04X\r\n", pageIndex, id);
 }
 
 /******************************************************************************

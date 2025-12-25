@@ -64,7 +64,8 @@ void DRAW_initScreen(imageType_t type, uint8_t slot);
 
 void DRAW_string(imageType_t type, uint8_t slot, uint16_t x, uint16_t y, const char *str, uint8_t fontSize, boolean_t color);
 
-/* Test helper: write first page from received buffer (PAGE_SIZE bytes + 2 CRC bytes) */
-void DRAW_testWriteFirstPage(imageType_t type, uint8_t slot, const uint8_t *buf, uint32_t len);
+/* Test helper: write one flash page from received buffer (PAGE_SIZE bytes + 2 CRC bytes)
+	pageIndex: flash page index within the image slot */
+void DRAW_testWritePage(imageType_t type, uint8_t slot, uint16_t pageIndex, const uint8_t *buf, uint32_t len);
 
 #endif // SCREEN_H

@@ -64,6 +64,12 @@ static uint32_t queueOverflowCount = 0;  // 统计队列溢出次数
 char buffer[256]; // 假设最大字符串长度为 256
 size_t bufferIndex = 0;
 
+/* 支持接收多页（每页 PAGE_SIZE 字节），最多 60 页。接收到每页后写入 flash，但不立即刷新显示。
+    接收方通过发送文本命令 "DISPLAY" (不含引号，结尾以 CR/LF) 来触发一次性显示已接收的所有页。
+    也可发送 "RESET_PAGES" 来重置接收页计数。 */
+#define MAX_PAGES_SUPPORTED 60
+static uint16_t receivedPageCount = 0;
+
 // 接收处理函数原型
 static void processReceivedBuffer(void);
 
@@ -405,13 +411,24 @@ static void processReceivedBuffer(void)
         {
             uint16_t sw_calc = crc16_ccitt((uint8_t *)buffer, (uint32_t)(bufferIndex - 2));
 
-            /* 专门处理 PAGE_SIZE + 2 的二进制页面帧：若 CRC 匹配则交由 DRAW_testWriteFirstPage 处理并返回 */
+            /* 专门处理 PAGE_SIZE + 2 的二进制页面帧：若 CRC 匹配则写入 flash（按序），但不立即显示 */
             if (bufferIndex == (PAGE_SIZE + 2))
             {
                 if (sw_calc == recv_crc)
                 {
-                    UARTIF_uartPrintf(0, "PAGE FRAME CRC OK: len=%d\r\n", (int)(bufferIndex - 2));
-                    DRAW_testWriteFirstPage(IMAGE_BW, 0, (const uint8_t *)buffer, (uint32_t)bufferIndex);
+                    UARTIF_uartPrintf(0, "PAGE FRAME CRC OK: len=%d page=%d\r\n", (int)(bufferIndex - 2), (int)receivedPageCount);
+                    /* 将该页写入 flash，使用 receivedPageCount 作为页索引（从 0 开始） */
+                    DRAW_testWritePage(IMAGE_BW, 0, receivedPageCount, (const uint8_t *)buffer, (uint32_t)bufferIndex);
+
+                    /* 计数并限制接收页数上限，避免越界 */
+                    if (receivedPageCount < MAX_PAGES_SUPPORTED - 1)
+                    {
+                        receivedPageCount++;
+                    }
+                    else
+                    {
+                        UARTIF_uartPrintf(0, "Reached max supported pages: %d\r\n", MAX_PAGES_SUPPORTED);
+                    }
                 }
                 else
                 {
@@ -424,16 +441,54 @@ static void processReceivedBuffer(void)
                 return;
             }
 
+            /* 非页面消息（小于 PAGE_SIZE+2）：如果 CRC 校验通过，解析为控制命令或忽略文本显示 */
             if (sw_calc == recv_crc)
             {
-                /* 校验成功（软件计算通过） */
-                UARTIF_uartPrintf(0, "CRC OK: len=%d\r\n", (int)(bufferIndex - 2));
-                /* 在显示前确保字符串以 NUL 终止（覆盖 CRC 起始位置） */
+                /* 确保以 NUL 结束，方便作为字符串处理 */
                 buffer[bufferIndex - 2] = '\0';
-                DRAW_initScreen(IMAGE_BW, 0);
-                DRAW_string(IMAGE_BW, 0, 10, 10, buffer, 3, BLACK);
-                (void)FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
-                EPD_WhiteScreenGDEY042Z98UsingFlashDate(IMAGE_BW,0);
+                UARTIF_uartPrintf(0, "CRC OK (control/text): len=%d payload='%s'\r\n", (int)(bufferIndex - 2), buffer);
+
+                /* 解析简单控制命令：DISPLAY / RESET_PAGES */
+                if (strcmp(buffer, "DISPLAY") == 0)
+                {
+                    UARTIF_uartPrintf(0, "DISPLAY command received: rendering %d pages\r\n", (int)receivedPageCount);
+                        /* 在刷新显示前，将未写入的剩余页全部写为 0xFF（白色） */
+                        {
+                            uint16_t i;
+                            uint16_t id;
+                            flash_result_t fres;
+                            uint8_t clearBuf[PAYLOAD_SIZE];
+                            memset(clearBuf, 0xFF, PAYLOAD_SIZE);
+                            for (i = receivedPageCount; i <= MAX_FRAME_NUM; ++i) {
+                                id = (uint16_t)(i | (0 << 8));
+                                fres = FM_writeData(MAGIC_BW_IMAGE_DATA, id, clearBuf, PAYLOAD_SIZE);
+                                if (fres != FLASH_OK) {
+                                    UARTIF_uartPrintf(0, "DISPLAY: clear page %u fail id=0x%04X err=%d\r\n", i, id, fres);
+                                }
+                            }
+                        }
+
+                        /* 写入 image header 并展示 flash 中的图像 */
+                        {
+                            flash_result_t fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
+                            if (fres != FLASH_OK) {
+                                UARTIF_uartPrintf(0, "DISPLAY: write header fail err=%d\r\n", fres);
+                            }
+                        }
+                        EPD_WhiteScreenGDEY042Z98UsingFlashDate(IMAGE_BW, 0);
+                        /* 显示后重置计数，准备下一次接收 */
+                        receivedPageCount = 0;
+                }
+                else if (strcmp(buffer, "RESET_PAGES") == 0)
+                {
+                    UARTIF_uartPrintf(0, "RESET_PAGES command received: resetting page count\r\n");
+                    receivedPageCount = 0;
+                }
+                else
+                {
+                    /* 其他文本不再显示到屏幕，仅记录日志 */
+                    UARTIF_uartPrintf(0, "Ignored text payload\r\n");
+                }
             }
             else
             {
@@ -459,13 +514,10 @@ static void processReceivedBuffer(void)
     }
     else
     {
-        /* 数据过短，无法校验，直接显示并记录 */
+        /* 数据过短，无法校验：记录日志但不在屏幕上直接显示文本 */
         buffer[bufferIndex] = '\0';
-        UARTIF_uartPrintf(0, "No CRC: len=%d\r\n", (int)bufferIndex);
-        DRAW_initScreen(IMAGE_BW, 0);
-        DRAW_string(IMAGE_BW, 0, 10, 10, buffer, 3, BLACK);
-        (void)FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
-        EPD_WhiteScreenGDEY042Z98UsingFlashDate(IMAGE_BW,0);
+        UARTIF_uartPrintf(0, "No CRC (short message): len=%d payload='%s'\r\n", (int)bufferIndex, buffer);
+        /* 不进行 DRAW_string、FM_writeImageHeader 或 EPD 刷新，以防止任意文本显示到屏幕 */
     }
 
     /* 重置缓冲区索引，准备接收下一条消息 */
