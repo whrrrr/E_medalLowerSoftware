@@ -42,6 +42,7 @@ static uint16_t G_imageAddressBuffer[MAX_FRAME_NUM + 1u];
 /*****************************************************************************
  * Function implementation - local ('static')
  ******************************************************************************/
+
 /**
  * @brief 辅助函数：重置 segment（可选重置0、1或同时重置两个）
  * @param reset0 是否重置segment0
@@ -340,12 +341,10 @@ static flash_result_t scanImageDataPages(uint8_t magic, uint8_t slotId)
                     break;
                 }
                 G_imageAddressBuffer[frameNum] = (uint16_t)((currentAddr & 0x00ffff00) >> 8u);
-                // UARTIF_uartPrintf(0, "scanImageDataPages Image %d: Address 0x%04x \n", frameNum, G_imageAddressBuffer[frameNum]);
 
                 frameIsFull |= ((uint64_t)1u << frameNum);
                 if (frameIsFull == 0x1FFFFFFFFFFFFFFF)
                 {
-                    UARTIF_uartPrintf(0, "flash_manager found all image data page! \n");
                     break;
                 }
                 else 
@@ -431,10 +430,6 @@ static flash_result_t readImageHeaderIntoBuffer(uint8_t magic, uint8_t slotId)
     result = FM_readData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
     if (result == FLASH_OK)
     {
-        // for (i = 0; i < MAX_FRAME_NUM + 1; i++)
-        // {
-        //     UARTIF_uartPrintf(0, "Image %d: Block 0x%02x, Page 0x%02x\n", i, G_buffer2[2*i + 1], G_buffer2[2*i]);
-        // }
         // memcpy_s(G_imageAddressBuffer, sizeof(G_imageAddressBuffer), G_buffer2, (MAX_FRAME_NUM + 1) * 2);
         memcpy(G_imageAddressBuffer, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
         // for (i = 0; i < MAX_FRAME_NUM + 1; i++)

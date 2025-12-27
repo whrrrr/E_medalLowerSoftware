@@ -52,6 +52,7 @@
 /******************************************************************************
  * Local function prototypes ('static')
  ******************************************************************************/
+void UARTIF_uartPrintf(uint8_t uartNumber, const char *format, ...);
 
 /******************************************************************************
  * Local variable definitions ('static')                                      *
@@ -75,6 +76,10 @@ static uint16_t receivedPageCount = 0;
 #define FRAME_MAGIC_1 0xCD
 /* 最大允许的单帧有效负载长度（安全上限） */
 #define FRAME_MAX_PAYLOAD 1024
+/* 静态解压缓冲区，避免栈溢出 */
+static uint8_t decompressBuffer[PAGE_SIZE];
+/* 静态缓冲区用于DISPLAY命令，避免栈溢出 */
+static uint8_t clearPageBuffer[PAYLOAD_SIZE];
 
 // 接收处理函数原型
 static void processReceivedBuffer(void);
@@ -103,6 +108,71 @@ static uint16_t crc16_ccitt(const uint8_t *data, uint32_t len)
         }
     }
     return crc;
+}
+
+/**
+ * @brief RLE 解压缩（就地解压到固定248字节缓冲区）
+ * @param compressed 压缩数据
+ * @param compLen 压缩数据长度
+ * @param output 输出缓冲区（必须至少248字节）
+ * @param maxOutLen 输出缓冲区最大长度
+ * @return 解压后的实际长度，失败返回0
+ */
+static size_t decompressPageRLE(const uint8_t *compressed, size_t compLen,
+                                uint8_t *output, size_t maxOutLen)
+{
+    size_t inPos = 0;
+    size_t outPos = 0;
+		uint8_t count;
+		uint8_t value;
+		size_t runLength;
+		size_t literalLen;
+
+	
+
+    while (inPos < compLen) {
+        if (inPos >= compLen) break;
+
+        count = compressed[inPos++];
+
+        if (count >= 128) {
+            /* 重复模式：257 - count = 实际重复次数 */
+            if (inPos >= compLen) {
+                UARTIF_uartPrintf(0, "RLE ERR: missing repeat value at pos %u\r\n", (unsigned)inPos);
+                return 0;
+            }
+
+            value = compressed[inPos++];
+            runLength = 257 - count;
+
+            if (outPos + runLength > maxOutLen) {
+                UARTIF_uartPrintf(0, "RLE ERR: buffer overflow, need %u have %u\r\n",
+                                  (unsigned)(outPos + runLength), (unsigned)maxOutLen);
+                return 0;
+            }
+
+            memset(&output[outPos], value, runLength);
+            outPos += runLength;
+        } else {
+            /* 字面量模式 */
+            literalLen = count;
+
+            if (inPos + literalLen > compLen) {
+                UARTIF_uartPrintf(0, "RLE ERR: insufficient literal data at pos %u\r\n", (unsigned)inPos);
+                return 0;
+            }
+            if (outPos + literalLen > maxOutLen) {
+                UARTIF_uartPrintf(0, "RLE ERR: buffer overflow in literal mode\r\n");
+                return 0;
+            }
+
+            memcpy(&output[outPos], &compressed[inPos], literalLen);
+            inPos += literalLen;
+            outPos += literalLen;
+        }
+    }
+
+    return outPos;
 }
 
 /******************************************************************************
@@ -383,24 +453,27 @@ void UARTIF_passThrough(void)
                 }
 
                 /* 尝试从缓冲区头部解析若干完整帧：
-                 * 帧格式：MAGIC(2B)=0xABCD | LEN(2B big-endian) | PAYLOAD(len) | CRC(2B)
+                 * 新帧格式：MAGIC(2B)=0xABCD | FLAGS(1B) | LEN(2B big-endian) | PAYLOAD(len) | CRC(2B)
                  */
-                while (bufferIndex >= 6) /* minimal frame header */
+                while (bufferIndex >= 7) /* minimal frame header with FLAGS */
                 {
                     /* pre-declare variables to satisfy older C compilers */
                     size_t k;
+                    uint8_t flags = 0;
                     uint16_t payloadLen = 0;
                     size_t frameTotal = 0;
                     uint16_t sw_calc = 0;
                     uint8_t high = 0;
                     uint8_t low = 0;
                     uint16_t recv_crc = 0;
+                    uint8_t isCompressed = 0;
                     size_t copyLen = 0;
-                    char tmp[256];
+                    char tmp[64];  /* 减小到64字节，足够DISPLAY命令 */
                     uint16_t i = 0;
                     uint16_t id = 0;
                     flash_result_t fres = FLASH_OK;
-                    uint8_t clearBuf[PAYLOAD_SIZE];
+                    size_t finalLen = 0;
+                    uint8_t *pData = NULL; /* 指向最终数据的指针 */
                     /* 查找并对齐到 MAGIC 开头 */
                     if ((uint8_t)buffer[0] != FRAME_MAGIC_0 || (uint8_t)buffer[1] != FRAME_MAGIC_1)
                     {
@@ -421,9 +494,13 @@ void UARTIF_passThrough(void)
                         continue;
                     }
 
-                    /* 至少需要 4 字节以读取长度 */
-                    if (bufferIndex < 4) break;
-                    payloadLen = (((uint8_t)buffer[2]) << 8) | (uint8_t)buffer[3];
+                    /* 至少需要 5 字节以读取 FLAGS + LEN */
+                    if (bufferIndex < 5) break;
+
+                    flags = (uint8_t)buffer[2];
+                    payloadLen = (((uint8_t)buffer[3]) << 8) | (uint8_t)buffer[4];
+                    isCompressed = flags & 0x01;
+
                     if (payloadLen > FRAME_MAX_PAYLOAD)
                     {
                         /* 非法长度，丢弃首字节重同步 */
@@ -432,64 +509,103 @@ void UARTIF_passThrough(void)
                         continue;
                     }
 
-                    frameTotal = 4 + (size_t)payloadLen + 2; /* header+len + payload + crc */
+                    frameTotal = 2 + 1 + 2 + (size_t)payloadLen + 2; /* MAGIC+FLAGS+LEN+PAYLOAD+CRC */
                     if (bufferIndex < frameTotal) break; /* 等待更多字节 */
 
-                    /* 计算并比较 CRC（对 payload 计算） */
-                    sw_calc = crc16_ccitt((uint8_t *)&buffer[4], (uint32_t)payloadLen);
-                    high = (uint8_t)buffer[4 + payloadLen];
-                    low = (uint8_t)buffer[4 + payloadLen + 1];
+                    /* 计算并比较 CRC（对压缩后的 payload 计算） */
+                    sw_calc = crc16_ccitt((uint8_t *)&buffer[5], (uint32_t)payloadLen);
+                    high = (uint8_t)buffer[5 + payloadLen];
+                    low = (uint8_t)buffer[5 + payloadLen + 1];
                     recv_crc = ((uint16_t)high << 8) | (uint16_t)low;
 
                     if (sw_calc == recv_crc)
                     {
-                        /* 有效帧：根据 payload 长度决定处理方式 */
-                        if (payloadLen == PAGE_SIZE)
+                        /* CRC 校验通过，处理payload */
+                        if (isCompressed)
                         {
-                            /* 直接把 payload+CRC 交给现有的写页测试函数（len = PAGE_SIZE + 2） */
-                            DRAW_testWritePage(IMAGE_BW, 0, receivedPageCount, (const uint8_t *)&buffer[4], (uint32_t)(payloadLen + 2));
-                            if (receivedPageCount < MAX_PAGES_SUPPORTED - 1)
-                            {
-                                receivedPageCount++;
+                            /* 解压到静态缓冲区 */
+                            finalLen = decompressPageRLE((uint8_t *)&buffer[5], payloadLen,
+                                                         decompressBuffer, PAGE_SIZE);
+
+                            if (finalLen == 0) {
+                                UARTIF_uartPrintf(0, "RLE decompress FAILED\r\n");
+                                /* 丢弃此帧 */
+                                if (bufferIndex > frameTotal) {
+                                    memmove(buffer, &buffer[frameTotal], bufferIndex - frameTotal);
+                                }
+                                bufferIndex -= frameTotal;
+                                continue;
                             }
-                            else
-                            {
-                                UARTIF_uartPrintf(0, "Reached max supported pages: %d\r\n", MAX_PAGES_SUPPORTED);
+
+                            UARTIF_uartPrintf(0, "RLE OK: %uB -> %uB\r\n", payloadLen, (unsigned)finalLen);
+                            pData = decompressBuffer;
+                        }
+                        else
+                        {
+                            /* 未压缩，直接使用buffer中的数据 */
+                            if (payloadLen > PAGE_SIZE) {
+                                UARTIF_uartPrintf(0, "Payload too large: %u > %u\r\n", payloadLen, PAGE_SIZE);
+                                if (bufferIndex > frameTotal) {
+                                    memmove(buffer, &buffer[frameTotal], bufferIndex - frameTotal);
+                                }
+                                bufferIndex -= frameTotal;
+                                continue;
+                            }
+                            pData = (uint8_t *)&buffer[5];
+                            finalLen = payloadLen;
+                        }
+
+                        /* 根据finalLen判断是页数据还是控制命令 */
+                        if (finalLen == PAGE_SIZE)
+                        {
+                            /* 写入Flash（直接写入，不经过testWritePage，因为CRC已在帧层验证） */
+                            id = (uint16_t)(receivedPageCount | (0 << 8));
+                            fres = FM_writeData(MAGIC_BW_IMAGE_DATA, id, pData, PAGE_SIZE);
+                            if (fres == FLASH_OK) {
+                                UARTIF_uartPrintf(0, "Page %u written, id=0x%04X\r\n", receivedPageCount, id);
+                                if (receivedPageCount < MAX_FRAME_NUM)
+                                {
+                                    receivedPageCount++;
+                                }
+                                else
+                                {
+                                    UARTIF_uartPrintf(0, "Reached max pages: %d\r\n", MAX_PAGES_SUPPORTED);
+                                }
+                            } else {
+                                UARTIF_uartPrintf(0, "Flash write fail: page %u id=0x%04X err=%d\r\n",
+                                                  receivedPageCount, id, fres);
                             }
                         }
                         else
                         {
-                            /* 控制或文本消息：拷贝 payload 并以 NUL 终止便于比较 */
-                            copyLen = (payloadLen < sizeof(buffer)-1) ? payloadLen : (sizeof(buffer)-1);
-                            memcpy(tmp, &buffer[4], copyLen);
+                            /* 控制命令 */
+                            copyLen = (finalLen < sizeof(tmp)-1) ? finalLen : (sizeof(tmp)-1);
+                            memcpy(tmp, pData, copyLen);
                             tmp[copyLen] = '\0';
-                            UARTIF_uartPrintf(0, "CTRL payload received: '%s'\r\n", tmp);
+                            UARTIF_uartPrintf(0, "CTRL: '%s'\r\n", tmp);
+
                             if (strcmp(tmp, "DISPLAY") == 0)
                             {
-                                UARTIF_uartPrintf(0, "DISPLAY command received: rendering %d pages\r\n", (int)receivedPageCount);
-                                memset(clearBuf, 0xFF, PAYLOAD_SIZE);
+                                UARTIF_uartPrintf(0, "DISPLAY: rendering %d pages\r\n", receivedPageCount);
+                                memset(clearPageBuffer, 0xFF, PAYLOAD_SIZE);
                                 for (i = receivedPageCount; i <= MAX_FRAME_NUM; ++i) {
                                     id = (uint16_t)(i | (0 << 8));
-                                    fres = FM_writeData(MAGIC_BW_IMAGE_DATA, id, clearBuf, PAYLOAD_SIZE);
+                                    fres = FM_writeData(MAGIC_BW_IMAGE_DATA, id, clearPageBuffer, PAYLOAD_SIZE);
                                     if (fres != FLASH_OK) {
-                                        UARTIF_uartPrintf(0, "DISPLAY: clear page %u fail id=0x%04X err=%d\r\n", i, id, fres);
+                                        UARTIF_uartPrintf(0, "Clear page %u fail\r\n", i);
                                     }
                                 }
                                 fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
                                 if (fres != FLASH_OK) {
-                                    UARTIF_uartPrintf(0, "DISPLAY: write header fail err=%d\r\n", fres);
+                                    UARTIF_uartPrintf(0, "Write header fail\r\n");
                                 }
                                 EPD_WhiteScreenGDEY042Z98UsingFlashDate(IMAGE_BW, 0);
                                 receivedPageCount = 0;
                             }
                             else if (strcmp(tmp, "RESET_PAGES") == 0)
                             {
-                                UARTIF_uartPrintf(0, "RESET_PAGES command received: resetting page count\r\n");
+                                UARTIF_uartPrintf(0, "RESET_PAGES\r\n");
                                 receivedPageCount = 0;
-                            }
-                            else
-                            {
-                                UARTIF_uartPrintf(0, "Ignored control payload\r\n");
                             }
                         }
 
@@ -503,8 +619,8 @@ void UARTIF_passThrough(void)
                     }
                     else
                     {
-                        /* CRC 错误：丢弃首字节并尝试重同步 */
-                        UARTIF_uartPrintf(0, "FRAME CRC ERR: recv=0x%04X calc_sw=0x%04X len=%d\r\n", recv_crc, sw_calc, (int)payloadLen);
+                        /* CRC 错误 */
+                        UARTIF_uartPrintf(0, "CRC ERR: recv=0x%04X calc=0x%04X\r\n", recv_crc, sw_calc);
                         memmove(buffer, &buffer[1], bufferIndex - 1);
                         bufferIndex -= 1;
                         continue;
@@ -544,7 +660,7 @@ static void processReceivedBuffer(void)
                     DRAW_testWritePage(IMAGE_BW, 0, receivedPageCount, (const uint8_t *)buffer, (uint32_t)bufferIndex);
 
                     /* 计数并限制接收页数上限，避免越界 */
-                    if (receivedPageCount < MAX_PAGES_SUPPORTED - 1)
+                    if (receivedPageCount < MAX_FRAME_NUM)
                     {
                         receivedPageCount++;
                     }
