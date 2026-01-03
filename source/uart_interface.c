@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #include "hc32l110.h"
 #include "ddl.h"
@@ -71,6 +72,9 @@ size_t bufferIndex = 0;
     也可发送 "RESET_PAGES" 来重置接收页计数。 */
 #define MAX_PAGES_SUPPORTED 60
 static uint16_t receivedPageCount = 0;
+
+/* 当前目标图像槽位（0..7），由主机通过 "SET_SLOT:<1-8>" 指定。默认0（槽位1） */
+static uint8_t currentImageSlot = 0;
 
 /* 最近写入的图像是否为红色通道（true 表示 RED 数据页已被写入） */
 static bool lastImageIsRed = false;
@@ -566,10 +570,10 @@ void UARTIF_passThrough(void)
                         }
 
                         /* 根据finalLen判断是页数据还是控制命令 */
-                        if (finalLen == PAGE_SIZE)
+                            if (finalLen == PAGE_SIZE)
                         {
                             /* 写入Flash（直接写入，不经过testWritePage，因为CRC已在帧层验证） */
-                            id = (uint16_t)(receivedPageCount | (0 << 8));
+                            id = (uint16_t)(receivedPageCount | ((uint16_t)currentImageSlot << 8));
                             /* 若是本张图片的第一包，使用 flags 指定颜色（整张图片同色） */
                             if (receivedPageCount == 0) {
                                 /* 恢复为原始逻辑：flags 中 1 表示红色 */
@@ -621,39 +625,54 @@ void UARTIF_passThrough(void)
                                     /* 清空 BW 通道为白 */
                                     memset(clearPageBuffer, 0xFF, PAYLOAD_SIZE);
                                     for (i = 0; i <= MAX_FRAME_NUM; ++i) {
-                                        id = (uint16_t)(i | (0 << 8));
+                                        id = (uint16_t)(i | ((uint16_t)currentImageSlot << 8));
                                         fres = FM_writeData(MAGIC_BW_IMAGE_DATA, id, clearPageBuffer, PAYLOAD_SIZE);
                                         if (fres != FLASH_OK) {
                                             UARTIF_uartPrintf(0, "Clear BW page %u fail\r\n", i);
                                         }
                                     }
                                     /* 写入 RED 的 image header（RED pages 已在接收时写入） */
-                                    fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, 0);
+                                    fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, currentImageSlot);
                                     if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write RED header fail\r\n");
                                     /* 写入 BW 的 image header（指向刚刚清空的白页） */
-                                    fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
+                                    fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, currentImageSlot);
                                     if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write BW header fail\r\n");
                                 } else {
                                     /* 清空 RED 通道为白（设备约定白色为0x00） */
                                     memset(clearPageBuffer, 0x00, PAYLOAD_SIZE);
                                     for (i = receivedPageCount; i <= MAX_FRAME_NUM; ++i) {
-                                        id = (uint16_t)(i | (0 << 8));
+                                        id = (uint16_t)(i | ((uint16_t)currentImageSlot << 8));
                                         fres = FM_writeData(MAGIC_RED_IMAGE_DATA, id, clearPageBuffer, PAYLOAD_SIZE);
                                         if (fres != FLASH_OK) {
                                             UARTIF_uartPrintf(0, "Clear RED page %u fail\r\n", i);
                                         }
                                     }
                                     /* 写入 BW header（BW pages 已在接收时写入） */
-                                    fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, 0);
+                                    fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, currentImageSlot);
                                     if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write BW header fail\r\n");
                                     /* 写入 RED header（指向已清空的白页） */
-                                    fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, 0);
+                                    fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, currentImageSlot);
                                     if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write RED header fail\r\n");
                                 }
 
                                 /* 根据 recent color 选择显示模式：若最近为红色则使用 BW_AND_RED */
-                                EPD_WhiteScreenGDEY042Z98UsingFlashDate(lastImageIsRed ? IMAGE_BW_AND_RED : IMAGE_BW, 0);
+                                EPD_WhiteScreenGDEY042Z98UsingFlashDate(lastImageIsRed ? IMAGE_BW_AND_RED : IMAGE_BW, currentImageSlot);
                                 receivedPageCount = 0;
+                            }
+                            else if (strncmp(tmp, "SET_SLOT:", 9) == 0)
+                            {
+                                int v = atoi(&tmp[9]);
+                                if (v >= 1 && v <= 8)
+                                {
+                                    currentImageSlot = (uint8_t)(v - 1);
+                                    UARTIF_uartPrintf(0, "SET_SLOT -> %d (slotIndex=%u)\r\n", v, currentImageSlot);
+                                    /* 重置已接收页计数，准备写入新槽 */
+                                    receivedPageCount = 0;
+                                }
+                                else
+                                {
+                                    UARTIF_uartPrintf(0, "SET_SLOT invalid: %s\r\n", tmp);
+                                }
                             }
                             else if (strcmp(tmp, "RESET_PAGES") == 0)
                             {
@@ -704,7 +723,7 @@ static void processReceivedBuffer(void)
             uint16_t sw_calc = crc16_ccitt((uint8_t *)buffer, (uint32_t)(bufferIndex - 2));
 
             /* 专门处理 PAGE_SIZE + 2 的二进制页面帧：若 CRC 匹配则写入 flash（按序），但不立即显示 */
-            if (bufferIndex == (PAGE_SIZE + 2))
+                    if (bufferIndex == (PAGE_SIZE + 2))
             {
                 if (sw_calc == recv_crc)
                 {
@@ -713,7 +732,7 @@ static void processReceivedBuffer(void)
                     /* 传入 IMAGE_RED 表示写入 RED 通道，IMAGE_BW 表示写入 BW 通道。
                      * 之前使用 IMAGE_BW_AND_RED 导致在写入端与显示端语义混淆。
                      */
-                    DRAW_testWritePage(lastImageIsRed ? IMAGE_RED : IMAGE_BW, 0, receivedPageCount, (const uint8_t *)buffer, (uint32_t)bufferIndex);
+                    DRAW_testWritePage(lastImageIsRed ? IMAGE_RED : IMAGE_BW, currentImageSlot, receivedPageCount, (const uint8_t *)buffer, (uint32_t)bufferIndex);
 
                     /* 计数并限制接收页数上限，避免越界 */
                     if (receivedPageCount < MAX_FRAME_NUM)
@@ -737,7 +756,7 @@ static void processReceivedBuffer(void)
             }
 
             /* 非页面消息（小于 PAGE_SIZE+2）：如果 CRC 校验通过，解析为控制命令或忽略文本显示 */
-            if (sw_calc == recv_crc)
+                if (sw_calc == recv_crc)
             {
                 /* 确保以 NUL 结束，方便作为字符串处理 */
                 buffer[bufferIndex - 2] = '\0';
@@ -760,7 +779,7 @@ static void processReceivedBuffer(void)
                         clearDataMagic = lastImageIsRed ? MAGIC_RED_IMAGE_DATA : MAGIC_BW_IMAGE_DATA;
                         headerMagic = lastImageIsRed ? MAGIC_RED_IMAGE_HEADER : MAGIC_BW_IMAGE_HEADER;
                         for (i = receivedPageCount; i <= MAX_FRAME_NUM; ++i) {
-                            id = (uint16_t)(i | (0 << 8));
+                            id = (uint16_t)(i | ((uint16_t)currentImageSlot << 8));
                             fres = FM_writeData(clearDataMagic, id, clearBuf, PAYLOAD_SIZE);
                             if (fres != FLASH_OK) {
                                 UARTIF_uartPrintf(0, "DISPLAY: clear page %u fail id=0x%04X err=%d\r\n", i, id, fres);
@@ -769,21 +788,35 @@ static void processReceivedBuffer(void)
 
                         /* 写入 image header 并展示 flash 中的图像 */
                         {
-                            flash_result_t fres = FM_writeImageHeader(headerMagic, 0);
+                            flash_result_t fres = FM_writeImageHeader(headerMagic, currentImageSlot);
                             if (fres != FLASH_OK) {
                                 UARTIF_uartPrintf(0, "DISPLAY: write header fail err=%d\r\n", fres);
                             }
                         }
-                        EPD_WhiteScreenGDEY042Z98UsingFlashDate(lastImageIsRed ? IMAGE_BW_AND_RED : IMAGE_BW, 0);
+                        EPD_WhiteScreenGDEY042Z98UsingFlashDate(lastImageIsRed ? IMAGE_BW_AND_RED : IMAGE_BW, currentImageSlot);
                         /* 显示后重置计数，准备下一次接收 */
                         receivedPageCount = 0;
+                    }
+                }
+                else if (strncmp(buffer, "SET_SLOT:", 9) == 0)
+                {
+                    int v = atoi(&buffer[9]);
+                    if (v >= 1 && v <= 8)
+                    {
+                        currentImageSlot = (uint8_t)(v - 1);
+                        UARTIF_uartPrintf(0, "SET_SLOT -> %d (slotIndex=%u)\r\n", v, currentImageSlot);
+                        receivedPageCount = 0;
+                    }
+                    else
+                    {
+                        UARTIF_uartPrintf(0, "SET_SLOT invalid: %s\r\n", buffer);
                     }
                 }
                 else if (strcmp(buffer, "RESET_PAGES") == 0)
                 {
                     UARTIF_uartPrintf(0, "RESET_PAGES command received: resetting page count\r\n");
                     receivedPageCount = 0;
-                }
+                }                
                 else
                 {
                     /* 其他文本不再显示到屏幕，仅记录日志 */
