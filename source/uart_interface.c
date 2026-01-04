@@ -604,10 +604,10 @@ void UARTIF_passThrough(void)
                                             }
                                         }
                                         /* 写入 RED 的 image header（RED pages 已在接收时写入） */
-                                        fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, currentImageSlot);
+                                        fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, currentImageSlot, lastImageIsRed ? 1u : 0u);
                                         if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write RED header fail\r\n");
                                         /* 写入 BW 的 image header（指向刚刚清空的白页） */
-                                        fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, currentImageSlot);
+                                        fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, currentImageSlot, lastImageIsRed ? 1u : 0u);
                                         if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write BW header fail\r\n");
                                     } else {
                                         /* 清空 RED 通道为白（设备约定白色为0x00），复用 decompressBuffer */
@@ -620,10 +620,10 @@ void UARTIF_passThrough(void)
                                             }
                                         }
                                         /* 写入 BW header（BW pages 已在接收时写入） */
-                                        fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, currentImageSlot);
+                                        fres = FM_writeImageHeader(MAGIC_BW_IMAGE_HEADER, currentImageSlot, lastImageIsRed ? 1u : 0u);
                                         if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write BW header fail\r\n");
                                         /* 写入 RED header（指向已清空的白页） */
-                                        fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, currentImageSlot);
+                                        fres = FM_writeImageHeader(MAGIC_RED_IMAGE_HEADER, currentImageSlot, lastImageIsRed ? 1u : 0u);
                                         if (fres != FLASH_OK) UARTIF_uartPrintf(0, "Write RED header fail\r\n");
                                     }
                                     /* 完成后重置计数，准备下一个槽或下次写入 */

@@ -234,7 +234,7 @@ void DRAW_initScreen(imageType_t type, uint8_t slot)
 
     if (result == FLASH_OK)
     {
-        result = FM_writeImageHeader(headerMagic, slot);
+        result = FM_writeImageHeader(headerMagic, slot, (headerMagic == MAGIC_RED_IMAGE_HEADER) ? 1u : 0u);
     }
 
     if (result == FLASH_OK)

@@ -281,6 +281,15 @@ static void readBlock(uint8_t blockAddress)
 }
 
 /**
+ * @brief 返回指定槽位的颜色标志（0 = BW, 1 = RED, 0xFF = 未知）
+ */
+uint8_t FM_getImageSlotColor(uint8_t slotId)
+{
+    if (slotId >= MAX_IMAGE_ENTRIES) return 0xFFu;
+    return fmCtx.imageSlotColor[slotId];
+}
+
+/**
  * @brief 扫描segment中的所有page，构建内存映射表
  */
 static flash_result_t scanSegmentPages(void)
@@ -426,12 +435,20 @@ static flash_result_t readImageHeaderIntoBuffer(uint8_t magic, uint8_t slotId)
 {
     // uint8_t i = 0;
     flash_result_t result = FLASH_OK;
+    /* Read addresses plus one-byte color flag (if present).
+     * FM_readData returns FLASH_OK only if the page exists and CRC matches.
+     */
     memset(G_buffer2, 0, FLASH_PAGE_SIZE);
-    result = FM_readData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+    result = FM_readData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2 + 1);
     if (result == FLASH_OK)
     {
-        // memcpy_s(G_imageAddressBuffer, sizeof(G_imageAddressBuffer), G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+        /* copy addresses */
         memcpy(G_imageAddressBuffer, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+        /* copy stored color flag if present */
+        if (slotId < MAX_IMAGE_ENTRIES)
+        {
+            fmCtx.imageSlotColor[slotId] = G_buffer2[(MAX_FRAME_NUM + 1) * 2];
+        }
     }
     return result;
 }
@@ -709,7 +726,7 @@ static flash_result_t garbageCollect(void)
         {
             if (fmCtx.entries[k][i] != 0xffff)
             {
-                result = FM_writeImageHeader(DATA_PAGE_MAGIC + k, i);
+                result = FM_writeImageHeader(DATA_PAGE_MAGIC + k, i, (fmCtx.imageSlotColor[i] == 1) ? 1u : 0u);
                 if (result != FLASH_OK)
                 {
                     UARTIF_uartPrintf(0, "ERR: flash_manager 0x08! write image header fail entry %d, type %d\n", i, k);
@@ -750,6 +767,7 @@ flash_result_t FM_init()
     memset(fmCtx.dataEntries, 0xff, sizeof(uint16_t) * MAX_DATA_ENTRIES);
     memset(fmCtx.imageBwEntries, 0xff, sizeof(uint16_t) * MAX_IMAGE_ENTRIES);
     memset(fmCtx.imageRedEntries, 0xff, sizeof(uint16_t) * MAX_IMAGE_ENTRIES);
+        memset(fmCtx.imageSlotColor, 0xFF, sizeof(fmCtx.imageSlotColor));
     fmCtx.nextWriteAddress = 0xffff;
 
     fmCtx.entries[0] = fmCtx.dataEntries;
@@ -762,22 +780,28 @@ flash_result_t FM_init()
     // 读取两个segment的header
     if (result == FLASH_OK)
     {
-        // 初始化管理器
    
-        result = readSegmentHeader(FLASH_SEGMENT0_BASE, FALSE);
-        if (result == FLASH_ERROR_READ_FAIL)
+        // 初始化管理器：读取两个 segment 的 header（segment0 -> header0, segment1 -> header1）
         {
-            UARTIF_uartPrintf(0, "ERR: flash_manager 0x04! header0 error\n");
-        }
-        else
-        {
-            result = readSegmentHeader(FLASH_SEGMENT1_BASE, TRUE);
-            if (result == FLASH_ERROR_READ_FAIL)
+            flash_result_t r0;
+            flash_result_t r1;
+
+            r0 = readSegmentHeader(FLASH_SEGMENT0_BASE, FALSE);
+            if (r0 == FLASH_ERROR_READ_FAIL)
+            {
+                UARTIF_uartPrintf(0, "ERR: flash_manager 0x04! header0 error\n");
+            }
+
+            r1 = readSegmentHeader(FLASH_SEGMENT1_BASE, TRUE);
+            if (r1 == FLASH_ERROR_READ_FAIL)
             {
                 UARTIF_uartPrintf(0, "ERR: flash_manager 0x04! header1 error\n");
             }
-            else
-            {
+
+            /* If both reads failed, consider init fail; otherwise continue */
+            if (r0 != FLASH_OK && r1 != FLASH_OK) {
+                result = FLASH_ERROR_READ_FAIL;
+            } else {
                 result = FLASH_OK;
             }
         }
@@ -867,7 +891,23 @@ flash_result_t FM_init()
         result = garbageCollect();
     }
 
-    
+    /* Populate per-slot color flags by reading existing image headers (if present) */
+    if ((result == FLASH_OK) && (needToInitList))
+    {
+        uint8_t kk;
+        uint8_t jj;
+        for (kk = 1; kk < 3; kk++)
+        {
+            for (jj = 0; jj < MAX_IMAGE_ENTRIES; jj++)
+            {
+                if (fmCtx.entries[kk][jj] != 0xffff)
+                {
+                    (void)readImageHeaderIntoBuffer((DATA_PAGE_MAGIC + kk), jj);
+                }
+            }
+        }
+    }
+
     return result;
 }
 
@@ -1100,10 +1140,9 @@ flash_result_t FM_forceGarbageCollect(void)
 /**
  * @brief 写入图像头页
  */
-flash_result_t FM_writeImageHeader(uint8_t magic, uint8_t slotId)
+flash_result_t FM_writeImageHeader(uint8_t magic, uint8_t slotId, uint8_t lastIsRed)
 {
     flash_result_t result = FLASH_OK;
-//    uint8_t i;
 
     if (magic != MAGIC_BW_IMAGE_HEADER && magic != MAGIC_RED_IMAGE_HEADER)
     {
@@ -1126,14 +1165,19 @@ flash_result_t FM_writeImageHeader(uint8_t magic, uint8_t slotId)
     {
         // 清空缓冲区
         memset(G_buffer2, 0, FLASH_PAGE_SIZE);
-        UARTIF_uartPrintf(0, "Writing image header for magic 0x%02x, slot %d\n", magic, slotId);
+        UARTIF_uartPrintf(0, "Writing image header for magic 0x%02x, slot %d (color=%u)\n", magic, slotId, (unsigned)lastIsRed);
         memcpy(G_buffer2, G_imageAddressBuffer, (MAX_FRAME_NUM + 1) * 2);
-        // for (i = 0; i < MAX_FRAME_NUM + 1; i++)
-        // {
-        //     UARTIF_uartPrintf(0, "Image %d: Block 0x%02x, Page 0x%02x\n", i, G_buffer2[2*i + 1], G_buffer2[2*i]);
-        // }
-        // 写入Flash
-        result = FM_writeData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
+        /* Append 1-byte color flag */
+        G_buffer2[(MAX_FRAME_NUM + 1) * 2] = (uint8_t)(lastIsRed ? 1u : 0u);
+        /* 写入 addresses + color flag */
+        result = FM_writeData(magic, slotId, G_buffer2, (MAX_FRAME_NUM + 1) * 2 + 1);
+        if (result == FLASH_OK)
+        {
+            if (slotId < MAX_IMAGE_ENTRIES)
+            {
+                fmCtx.imageSlotColor[slotId] = (uint8_t)(lastIsRed ? 1u : 0u);
+            }
+        }
     }
     if (result != FLASH_OK)
     {
