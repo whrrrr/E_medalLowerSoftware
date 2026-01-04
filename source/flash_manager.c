@@ -432,10 +432,6 @@ static flash_result_t readImageHeaderIntoBuffer(uint8_t magic, uint8_t slotId)
     {
         // memcpy_s(G_imageAddressBuffer, sizeof(G_imageAddressBuffer), G_buffer2, (MAX_FRAME_NUM + 1) * 2);
         memcpy(G_imageAddressBuffer, G_buffer2, (MAX_FRAME_NUM + 1) * 2);
-        // for (i = 0; i < MAX_FRAME_NUM + 1; i++)
-        // {
-        //     UARTIF_uartPrintf(0, "Image %d: Address 0x%04x \n", i, G_imageAddressBuffer[i]);
-        // }
     }
     return result;
 }
@@ -1024,12 +1020,12 @@ flash_result_t FM_readData(uint8_t magic, uint16_t dataId, uint8_t* data, uint8_
     if (result == FLASH_OK)
     {
         memset(G_buffer1, 0, FLASH_PAGE_SIZE);
-        UARTIF_uartPrintf(0, "flash_manager: read data from flash destAddress is 0x%08x! \n", destAddress);
         // 读取数据页到缓冲区
         if (W25Q32_ReadData(destAddress, G_buffer1, FLASH_PAGE_SIZE) != 0) 
         {
             result = FLASH_ERROR_READ_FAIL;
         }
+        
     }
     
     if (result == FLASH_OK)
