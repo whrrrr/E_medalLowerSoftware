@@ -15,5 +15,6 @@ void E104_setConnectionInterval(uint16_t interval);
 // ===== 测试函数 =====
 void E104_testBasicAT(void);
 void E104_diagnosisMode(void);
+void E104_testMTU(void);  // MTU 测试
 
 void E104_sendTestData(void);

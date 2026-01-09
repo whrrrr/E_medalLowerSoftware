@@ -205,22 +205,26 @@ uint16_t E104_receiveResponse(uint32_t timeout_ms)
 {
     uint8_t rxData;
     uint16_t rxCount = 0;
-    uint32_t timeoutCounter = timeout_ms;
+    uint32_t timeoutCounter = 0;
     
-    while (timeoutCounter-- > 0) {
+    // 等待数据到达
+    while (timeoutCounter < timeout_ms) {
         if (!UARTIF_isLpUartQueueEmpty()) {
             if (UARTIF_dequeueFromLpUart(&rxData)) {
                 UARTIF_uartPrintf(0, "%c", rxData);  // 实时打印接收字节
                 rxCount++;
-                timeoutCounter = timeout_ms;
+                timeoutCounter = 0;  // 收到数据后重置超时
             }
         } else {
             delay1ms(1);
+            timeoutCounter++;
         }
     }
     
     if (rxCount > 0) {
         UARTIF_uartPrintf(0, "\n");
+    } else {
+        UARTIF_uartPrintf(0, "(no response)\n");
     }
     return rxCount;
 }
@@ -303,38 +307,29 @@ void E104_setConnectionInterval(uint16_t interval)
 /**
  * @brief 诊断GPIO和LPUART状态
  */
-/**
- * @brief 诊断GPIO和LPUART状态
- */
 void E104_diagnosisMode(void)
 {
     uint16_t waitCount = 0;
     uint8_t rxData;
     boolean_t linkState;
-    uint16_t rxTotal = 0;  // 移到函数开头
+    uint16_t rxTotal = 0;
     
     UARTIF_uartPrintf(0, "\n[DIAG] START\n");
     
-    // 检查初始Link状态
     linkState = E104_getLinkState();
     UARTIF_uartPrintf(0, "[DIAG] Link=%d\n", linkState);
     
-    // 唤醒
     E104_setWakeUpMode();
     delay1ms(300);
-    UARTIF_uartPrintf(0, "[DIAG] Wake\n");
     
-    // 配置模式
     E104_setConfigMode();
     delay1ms(300);
-    UARTIF_uartPrintf(0, "[DIAG] Config mode\n");
     
-    // 等待5秒接收数据
     waitCount = 5000;
     while (waitCount-- > 0) {
         if (!UARTIF_isLpUartQueueEmpty()) {
             if (UARTIF_dequeueFromLpUart(&rxData)) {
-                if (rxTotal < 20) {  // 最多显示20字节
+                if (rxTotal < 20) {
                     UARTIF_uartPrintf(0, "%02X ", rxData);
                 }
                 rxTotal++;
@@ -343,65 +338,124 @@ void E104_diagnosisMode(void)
         delay1ms(1);
     }
     
-    UARTIF_uartPrintf(0, "\n[DIAG] RX total: %d bytes\n", rxTotal);
-    UARTIF_uartPrintf(0, "[DIAG] END\n");
-}
-void E104_testBasicAT(void)
-{
-    UARTIF_uartPrintf(0, "\n[TEST] E104 AT Test\n");
-    
-    // 唤醒
-    E104_setWakeUpMode();
-    delay1ms(300);
-    
-    // 进入配置模式
-    E104_setConfigMode();
-    delay1ms(300);
-    
-    // 测试 AT 指令
-    UARTIF_uartPrintf(0, "Test 1: AT\n");
-    E104_sendATCommand("AT");
-    E104_receiveResponse(500);
-    
-    delay1ms(200);
-    
-    // 查询连接间隔
-    UARTIF_uartPrintf(0, "Test 2: AT+CONMIN?\n");
-    E104_sendATCommand("AT+CONMIN?");
-    E104_receiveResponse(500);
-    
-    delay1ms(200);
-    
-    // 查询连接间隔MAX
-    UARTIF_uartPrintf(0, "Test 3: AT+CONMAX?\n");
-    E104_sendATCommand("AT+CONMAX?");
-    E104_receiveResponse(500);
-    
-    delay1ms(200);
-    
-    // 查询设备角色
-    UARTIF_uartPrintf(0, "Test 4: AT+ROLE?\n");
-    E104_sendATCommand("AT+ROLE?");
-    E104_receiveResponse(500);
-    
-    delay1ms(200);
-    
-    // 退出配置模式
-    E104_setTransmitMode();
-    delay1ms(300);
-    UARTIF_uartPrintf(0, "[TEST] Done\n");
+    UARTIF_uartPrintf(0, "\n[DIAG] RX: %d bytes\n", rxTotal);
 }
 
 /**
- * @brief 发送测试数据 - 验证 BLE 特征是否可读
- * 这个函数用于验证 App 能否收到设备发送的数据
+ * @brief E104 初始化和配置优化
+ */
+void E104_testBasicAT(void)
+{
+    UARTIF_uartPrintf(0, "\n[E104] Config\n");
+    
+    E104_setWakeUpMode();
+    delay1ms(300);
+    
+    E104_setConfigMode();
+    delay1ms(300);
+    
+    // 基本测试
+    UARTIF_uartPrintf(0, "AT: ");
+    E104_sendATCommand("AT");
+    E104_receiveResponse(300);
+    
+    // 查询版本
+    UARTIF_uartPrintf(0, "VER: ");
+    E104_sendATCommand("AT+VER?");
+    E104_receiveResponse(300);
+    
+    // 关闭数据延迟 (优化传输速度)
+    UARTIF_uartPrintf(0, "DATDLY=0: ");
+    E104_sendATCommand("AT+DATDLY=0");
+    E104_receiveResponse(300);
+    
+    // 验证
+    UARTIF_uartPrintf(0, "DATDLY: ");
+    E104_sendATCommand("AT+DATDLY?");
+    E104_receiveResponse(300);
+    
+    // 查询连接间隔
+    UARTIF_uartPrintf(0, "CONMIN: ");
+    E104_sendATCommand("AT+CONMIN?");
+    E104_receiveResponse(300);
+    
+    UARTIF_uartPrintf(0, "CONMAX: ");
+    E104_sendATCommand("AT+CONMAX?");
+    E104_receiveResponse(300);
+    
+    E104_setTransmitMode();
+    delay1ms(200);
+    UARTIF_uartPrintf(0, "[E104] Ready\n");
+}
+
+/**
+ * @brief MTU 测试 - 统计 Android 端发送的数据实际收到多少字节
+ */
+void E104_testMTU(void)
+{
+    uint8_t rxData;
+    uint16_t rxCount = 0;
+    uint16_t totalReceived = 0;
+    uint32_t idleTime = 0;
+    uint16_t packetNum = 0;
+    
+    UARTIF_uartPrintf(0, "\n[MTU TEST] Waiting 30s...\n");
+    
+    E104_setTransmitMode();
+    delay1ms(100);
+    
+    // 清空队列
+    while (!UARTIF_isLpUartQueueEmpty()) {
+        UARTIF_dequeueFromLpUart(&rxData);
+    }
+    
+    // 等待最多 30 秒
+    while (idleTime < 30000) {
+        if (!UARTIF_isLpUartQueueEmpty()) {
+            if (rxCount == 0) {
+                packetNum++;
+                UARTIF_uartPrintf(0, "[PKT %d] ", packetNum);
+            }
+            
+            while (!UARTIF_isLpUartQueueEmpty()) {
+                if (UARTIF_dequeueFromLpUart(&rxData)) {
+                    rxCount++;
+                    totalReceived++;
+                    if (rxCount <= 16) {
+                        UARTIF_uartPrintf(0, "%02X ", rxData);
+                    }
+                }
+            }
+            
+            delay1ms(5);
+            
+            if (UARTIF_isLpUartQueueEmpty()) {
+                if (rxCount > 16) {
+                    UARTIF_uartPrintf(0, "...");
+                }
+                UARTIF_uartPrintf(0, " = %d bytes\n", rxCount);
+                rxCount = 0;
+            }
+            
+            idleTime = 0;
+        } else {
+            delay1ms(1);
+            idleTime++;
+            
+            if (idleTime % 5000 == 0 && totalReceived == 0) {
+                UARTIF_uartPrintf(0, "Waiting... %ds\n", idleTime / 1000);
+            }
+        }
+    }
+    
+    UARTIF_uartPrintf(0, "[MTU] Total: %d pkts, %d bytes\n", packetNum, totalReceived);
+}
+
+/**
+ * @brief 发送测试数据
  */
 void E104_sendTestData(void)
 {
-    const char *testMsg = "TEST_DATA_OK";
-    UARTIF_uartPrintf(0, "[E104_TEST] Sending test data to BLE characteristic\n");
-    // 注意：这需要通过 BLE 特征发送，但在 MCU 端 E104 是 BLE 主机
-    // 实际测试需要 E104 将数据放入特征，App 才能读到
-    // 这里仅作示意
+    UARTIF_uartPrintf(0, "[E104] Send test\n");
 }
 

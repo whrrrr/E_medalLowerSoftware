@@ -377,12 +377,10 @@ int32_t main(void)
     E104_ioInit();
     W25Q32_Init();
     delay1ms(30);
-    E104_setSleepMode();
     
-    // ===== 测试 E104 AT 指令 =====
-    delay1ms(100);
-    E104_testBasicAT();
-    delay1ms(200);
+    // E104 进入透传模式
+    E104_setTransmitMode();
+    delay1ms(50);
 
     timInit();
 
@@ -518,7 +516,7 @@ int32_t main(void)
     while(1)
     {
         // 暂时注释掉，用于E104 AT命令测试
-        // UARTIF_passThrough();
+        UARTIF_passThrough();
         
         // 5ms task: image transfer processing
         // if (tg5ms)
@@ -526,20 +524,6 @@ int32_t main(void)
         //     tg5ms = FALSE;
         //     ImageTransferV2_Process();
         // }
-
-        // EPD_WhiteScreenGDEY042Z98UsingFlashDate(0x000000);
-        // UARTIF_uartPrintf(0, "P1! \n");
-        // delay1ms(10000);
-
-        // EPD_WhiteScreenGDEY042Z98ALLWrite();
-        // delay1ms(10000);
-
-        // EPD_WhiteScreenGDEY042Z98UsingFlashDate(0x000100);
-        // UARTIF_uartPrintf(0, "P2! \n");
-        // delay1ms(10000);
-
-        // EPD_WhiteScreenGDEY042Z98ALLWrite();
-        // delay1ms(10000);
 
     }
 
