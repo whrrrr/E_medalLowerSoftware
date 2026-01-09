@@ -224,10 +224,13 @@ void LPUART_rxIntCallback(void)
 {
     volatile char data = 0;
     data = LPUart_ReceiveData();
-
-    if (Queue_Enqueue(&lpUartRecdata, data))
-    {
-        LPUart_ClrStatus(LPUartRxFull);
+    
+    // 清除状态标志
+    LPUart_ClrStatus(LPUartRxFull);
+    
+    // 放入接收队列
+    if (!Queue_Enqueue(&lpUartRecdata, data)) {
+        // 队列满时的警告（可选，节省空间时可删除）
     }
 }
 
@@ -366,10 +369,7 @@ void UARTIF_lpuartInit(void)
    
    Clk_SetPeripheralGate(ClkPeripheralLpUart,TRUE);//使能LPUART时钟
    
-   //通道端口配置
-   Gpio_InitIOExt(3,3,GpioDirOut,TRUE,FALSE,FALSE,FALSE);
-   Gpio_InitIOExt(3,4,GpioDirOut,TRUE,FALSE,FALSE,FALSE);
-
+   //通道端口配置 - Gpio_SetFunc_UART2RX/TX宏已经设置了方向，不要重复配置
    Gpio_SetFunc_UART2RX_P33();
    Gpio_SetFunc_UART2TX_P34();
    
@@ -410,7 +410,11 @@ void UARTIF_lpuartInit(void)
    Bt_Cnt16Set(TIM2,u16timer);
    Bt_Run(TIM2);
 
-   LPUart_EnableFunc(LPUartRx);
+   // ✓ 关键修复：LPUart_EnableFunc(LPUartTx) 会覆盖 REN 标志
+   // 按模式3，TX/RX都应该启用，但LPUartTx=0, LPUartRx=1
+   // 顺序很关键：必须最后调用 LPUart_EnableFunc(LPUartRx) 以确保 REN=1
+   LPUart_EnableFunc(LPUartTx);
+   LPUart_EnableFunc(LPUartRx);  // 最后启用RX，确保 REN=1（接收启用）
    LPUart_EnableIrq(LPUartRxIrq);
    LPUart_ClrStatus(LPUartRxFull);
 }
@@ -938,6 +942,28 @@ void UARTIF_resetUartStats(void)
 {
     uartRxCount = 0;
     queueOverflowCount = 0;
+}
+
+/**
+ * @brief 检查 LPUART 接收队列是否为空
+ * @return TRUE 如果队列为空，FALSE 如果队列非空
+ */
+boolean_t UARTIF_isLpUartQueueEmpty(void)
+{
+    return Queue_IsEmpty(&lpUartRecdata);
+}
+
+/**
+ * @brief 从 LPUART 接收队列中取一个字节
+ * @param data 指向输出缓冲区的指针
+ * @return TRUE 如果成功取出数据，FALSE 如果队列为空
+ */
+boolean_t UARTIF_dequeueFromLpUart(uint8_t *data)
+{
+    if (data == NULL) {
+        return FALSE;
+    }
+    return Queue_Dequeue(&lpUartRecdata, data);
 }
 
 /******************************************************************************

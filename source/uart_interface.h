@@ -14,5 +14,10 @@ uint16_t UARTIF_fetchDataFromUart(uint8_t *buf, uint16_t *idx);
 void UARTIF_getUartStats(uint32_t *rxCount, uint32_t *overflowCount);
 void UARTIF_resetUartStats(void);
 
+// ===== LPUART 接收队列访问接口（用于 E104 AT 指令接收）=====
+// 检查 LPUART 接收队列是否为空
+boolean_t UARTIF_isLpUartQueueEmpty(void);
+// 从 LPUART 接收队列中取一个字节
+boolean_t UARTIF_dequeueFromLpUart(uint8_t *data);
 
 #endif // UART_INTERFACE_H

@@ -1,17 +1,19 @@
 
  void E104_ioInit(void);
 
-boolean_t E104_getLinkState(void); // 返回 TRUE 链接成功； FALSE 链接断开
-// boolean_t E104_getDataState(void); // 返回 TRUE 数据传输中； FALSE 无数据
+boolean_t E104_getLinkState(void);
 void E104_setSleepMode(void);
-
 void E104_setWakeUpMode(void);
+void E104_setConfigMode(void);
+void E104_setTransmitMode(void);
 
-// void E104_setTransmitMode(void);
+// ===== AT 指令配置 =====
+void E104_sendATCommand(const char *cmd);
+uint16_t E104_receiveResponse(uint32_t timeout_ms);
+void E104_setConnectionInterval(uint16_t interval);
 
-// void E104_setConfigMode(void);
+// ===== 测试函数 =====
+void E104_testBasicAT(void);
+void E104_diagnosisMode(void);
 
-// void E104_setDisconnect(void);
-
-void E104_executeCommand(void);
-
+void E104_sendTestData(void);

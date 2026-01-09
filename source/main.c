@@ -378,6 +378,11 @@ int32_t main(void)
     W25Q32_Init();
     delay1ms(30);
     E104_setSleepMode();
+    
+    // ===== 测试 E104 AT 指令 =====
+    delay1ms(100);
+    E104_testBasicAT();
+    delay1ms(200);
 
     timInit();
 
@@ -512,7 +517,9 @@ int32_t main(void)
 
     while(1)
     {
-        UARTIF_passThrough();
+        // 暂时注释掉，用于E104 AT命令测试
+        // UARTIF_passThrough();
+        
         // 5ms task: image transfer processing
         // if (tg5ms)
         // {
